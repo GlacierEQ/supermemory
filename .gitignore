@@ -1,5 +1,6 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 bun.lockb
+bun.lock
 tests/
 new-api/
 
@@ -65,3 +66,10 @@ config.private.*
 # Personal notes/todos
 TODO.md
 NOTES.md
+
+# Operator build output
+packages/*/dist/
+
+# Logs
+*.log
+Codex_Agent_*
