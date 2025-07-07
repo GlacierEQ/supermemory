@@ -82,6 +82,7 @@ supermemory-operator show-user <userId>
 supermemory-operator show-document <documentId>
 supermemory-operator show-space <spaceId>
 supermemory-operator list-space-documents <spaceId>
+supermemory-operator space-summary <spaceId>
 ```
 
 Ensure `DATABASE_URL` is set in your environment before running commands.
