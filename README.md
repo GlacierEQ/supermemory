@@ -191,3 +191,45 @@ We are grateful for the support of our supporters:
   </tr>
 </table>
 
+## Operator CLI
+
+A command-line interface is available in the `@supermemory/operator` package to help manage the database. Build the package and link the binary:
+
+```bash
+bun install
+cd packages/operator && bun run build && bun link
+```
+
+Then run commands such as:
+
+```bash
+supermemory-operator create-user user@example.com
+supermemory-operator list-users
+supermemory-operator list-documents <userId> --sort created
+supermemory-operator list-documents <userId> --sort title --desc
+supermemory-operator create-space <userId> "My Space" --public
+supermemory-operator list-spaces <userId>
+supermemory-operator delete-user <userId>
+supermemory-operator delete-space <spaceId>
+supermemory-operator update-space <spaceId> -n "New Name" --public true
+supermemory-operator add-waitlist someone@example.com
+supermemory-operator list-waitlist
+supermemory-operator add-space-member <spaceId> <userId>
+supermemory-operator remove-space-member <spaceId> <userId>
+supermemory-operator list-space-members <spaceId>
+
+supermemory-operator remove-waitlist <email>
+supermemory-operator create-document <userId> <url> --title "Title"
+supermemory-operator delete-document <documentId>
+supermemory-operator update-document <documentId> --title "New Title"
+supermemory-operator update-user <userId> --email new@example.com
+supermemory-operator add-document-space <documentId> <spaceId>
+supermemory-operator remove-document-space <documentId> <spaceId>
+supermemory-operator show-user <userId>
+supermemory-operator show-document <documentId>
+supermemory-operator show-space <spaceId>
+supermemory-operator list-space-documents <spaceId>
+supermemory-operator space-summary <spaceId>
+supermemory-operator user-summary <userId>
+```
+
