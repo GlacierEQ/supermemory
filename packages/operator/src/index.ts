@@ -25,6 +25,7 @@ import { registerShowDocument } from "./commands/showDocument";
 import { registerShowSpace } from "./commands/showSpace";
 import { registerListSpaceDocuments } from "./commands/listSpaceDocuments";
 import { registerSpaceSummary } from "./commands/spaceSummary";
+import { registerUserSummary } from "./commands/userSummary";
 
 // Ensure DATABASE_URL is loaded early
 getDb();
@@ -60,6 +61,7 @@ registerShowDocument(program);
 registerShowSpace(program);
 registerListSpaceDocuments(program);
 registerSpaceSummary(program);
+registerUserSummary(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   console.error(err);
