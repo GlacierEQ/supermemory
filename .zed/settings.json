@@ -1,0 +1,51 @@
+{
+  "lsp": {
+    "typescript-language-server": {
+      "enabled": true
+    },
+    "eslint": {
+      "enabled": true,
+      "args": [
+        "--stdin",
+        "--stdin-filename",
+        "{buffer_path}",
+        "--format",
+        "json"
+      ]
+    }
+  },
+  "formatter": {
+    "command": "prettier",
+    "args": [
+      "--stdin-filepath",
+      "{buffer_path}"
+    ]
+  },
+  "format_on_save": true,
+  "code_actions_on_save": {
+    "source.fixAll.eslint": true
+  },
+  "agent": {
+    "default_model": {
+      "provider": "openai",
+      "model": "gpt-4o-mini"
+    },
+    "inline_assistant_model": {
+      "provider": "anthropic",
+      "model": "claude-3-5-sonnet"
+    },
+    "commit_message_model": {
+      "provider": "openai",
+      "model": "gpt-4o-mini"
+    },
+    "thread_summary_model": {
+      "provider": "google",
+      "model": "gemini-2.0-flash"
+    },
+    "model_parameters": [
+      {
+        "temperature": 0
+      }
+    ]
+  }
+}

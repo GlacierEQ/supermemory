@@ -9,6 +9,7 @@
     "build": "turbo build",
     "dev": "turbo dev",
     "lint": "turbo lint",
+    "test": "npx --yes vitest@2.1.5 run packages/shared/env.test.ts packages/integrations/index.test.ts --globals --environment node",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "generate-migration": "turbo generate-migration",
     "migrate:local": "turbo migrate:local",
@@ -20,7 +21,8 @@
     "prettier": "^3.2.5",
     "tailwindcss": "^3.4.15",
     "turbo": "^2.1.3",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.5"
   },
   "engines": {
     "node": ">=18"
