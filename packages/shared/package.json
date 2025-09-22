@@ -4,7 +4,8 @@
   "exports": {
     ".": "./utils.ts",
     "./types": "./types.ts",
-    "./icons": "./icons.tsx"
+    "./icons": "./icons.tsx",
+    "./env": "./env.ts"
   },
   "dependencies": {
     "ai": "^4.0.18"
