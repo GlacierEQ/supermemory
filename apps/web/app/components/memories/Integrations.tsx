@@ -289,8 +289,8 @@ function Integrations() {
 										fy="96.934%"
 										gradientTransform="rotate(-104 11141.322 0)"
 									>
-										<stop offset="0%" stop-color="#FFF" stop-opacity=".4" />
-										<stop offset="100%" stop-opacity=".1" />
+                            <stop offset="0%" stopColor="#FFF" stopOpacity=".4" />
+										<stop offset="100%" stopOpacity=".1" />
 									</radialGradient>
 									<radialGradient
 										id="b"
@@ -301,8 +301,8 @@ function Integrations() {
 										fy="90.632%"
 										gradientTransform="rotate(-82 10746.75 0)"
 									>
-										<stop offset="0%" stop-color="#FFF" stop-opacity=".6" />
-										<stop offset="100%" stop-color="#FFF" stop-opacity=".1" />
+                            <stop offset="0%" stopColor="#FFF" stopOpacity=".6" />
+                            <stop offset="100%" stopColor="#FFF" stopOpacity=".1" />
 									</radialGradient>
 									<radialGradient
 										id="c"
@@ -313,8 +313,8 @@ function Integrations() {
 										fy="97.138%"
 										gradientTransform="rotate(-77 10724.606 0)"
 									>
-										<stop offset="0%" stop-color="#FFF" stop-opacity=".8" />
-										<stop offset="100%" stop-color="#FFF" stop-opacity=".4" />
+                            <stop offset="0%" stopColor="#FFF" stopOpacity=".8" />
+                            <stop offset="100%" stopColor="#FFF" stopOpacity=".4" />
 									</radialGradient>
 									<radialGradient
 										id="d"
@@ -325,8 +325,8 @@ function Integrations() {
 										fy="99.994%"
 										gradientTransform="translate(0 22251839.658) skewY(-90)"
 									>
-										<stop offset="0%" stop-color="#FFF" stop-opacity=".3" />
-										<stop offset="100%" stop-opacity=".3" />
+                            <stop offset="0%" stopColor="#FFF" stopOpacity=".3" />
+										<stop offset="100%" stopOpacity=".3" />
 									</radialGradient>
 									<radialGradient
 										id="e"
@@ -337,8 +337,8 @@ function Integrations() {
 										fy="34.769%"
 										gradientTransform="rotate(102 -1004.443 0)"
 									>
-										<stop offset="0%" stop-color="#FFF" stop-opacity="0" />
-										<stop offset="100%" stop-color="#FFF" stop-opacity=".2" />
+                            <stop offset="0%" stopColor="#FFF" stopOpacity="0" />
+                            <stop offset="100%" stopColor="#FFF" stopOpacity=".2" />
 									</radialGradient>
 									<radialGradient
 										id="f"
@@ -349,8 +349,8 @@ function Integrations() {
 										fy="8.712%"
 										gradientTransform="rotate(45 1674.397 0)"
 									>
-										<stop offset="0%" stop-color="#FFF" stop-opacity=".2" />
-										<stop offset="100%" stop-color="#FFF" stop-opacity=".4" />
+                            <stop offset="0%" stopColor="#FFF" stopOpacity=".2" />
+                            <stop offset="100%" stopColor="#FFF" stopOpacity=".4" />
 									</radialGradient>
 									<radialGradient
 										id="g"
@@ -361,8 +361,8 @@ function Integrations() {
 										fy="-22.172%"
 										gradientTransform="rotate(80 3757.522 0)"
 									>
-										<stop offset="0%" stop-color="#FFF" stop-opacity=".1" />
-										<stop offset="100%" stop-color="#FFF" stop-opacity=".3" />
+                            <stop offset="0%" stopColor="#FFF" stopOpacity=".1" />
+                            <stop offset="100%" stopColor="#FFF" stopOpacity=".3" />
 									</radialGradient>
 									<radialGradient
 										id="h"
@@ -373,13 +373,13 @@ function Integrations() {
 										fy="89.193%"
 										gradientTransform="translate(0 -38783246.548) skewY(-90)"
 									>
-										<stop offset="0%" stop-color="#FFF" stop-opacity=".2" />
-										<stop offset="50%" stop-color="#FFF" stop-opacity=".2" />
-										<stop offset="100%" stop-color="#FFF" stop-opacity=".3" />
+                            <stop offset="0%" stopColor="#FFF" stopOpacity=".2" />
+                            <stop offset="50%" stopColor="#FFF" stopOpacity=".2" />
+                            <stop offset="100%" stopColor="#FFF" stopOpacity=".3" />
 									</radialGradient>
 								</defs>
 								<path
-									fill-opacity=".3"
+									fillOpacity=".3"
 									d="M209.056 308.305c-2.043 14.93-16.738 26.638-31.432 22.552-20.823-5.658-44.946-14.616-66.634-16.266l-33.317-2.515a22.002 22.002 0 0 1-14.144-6.522L6.167 246.778a21.766 21.766 0 0 1-4.244-24.124s35.36-77.478 36.775-81.485c1.257-4.008 6.13-39.211 8.958-58.07a22.002 22.002 0 0 1 7.072-12.965L122.462 9.47a22.002 22.002 0 0 1 31.903 2.672l57.048 71.978a23.18 23.18 0 0 1 4.872 14.38c0 13.594 1.179 41.646 8.8 59.72a236.756 236.756 0 0 0 27.974 45.732 11.001 11.001 0 0 1 .786 12.258c-4.95 8.408-14.851 24.595-28.76 45.26a111.738 111.738 0 0 0-16.108 46.834h.079Z"
 								/>
 								<path

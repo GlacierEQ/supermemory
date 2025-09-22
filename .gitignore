@@ -65,3 +65,7 @@ config.private.*
 # Personal notes/todos
 TODO.md
 NOTES.md
+bun.lock
+blockchain_vault.log
+timeline.log
+Codex_Agent_*

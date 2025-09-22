@@ -7,7 +7,7 @@ import adapter from "@hono/vite-dev-server/cloudflare";
 import serverAdapter from "hono-remix-adapter/vite";
 import path from "path";
 import { flatRoutes } from "remix-flat-routes";
-import { UserConfig, defineConfig, loadEnv } from "vite";
+import { UserConfig, defineConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 
 const _plugins = [
@@ -66,11 +66,11 @@ export default defineConfig((mode) => {
 					if (warning.code === "IGNORED_BARE_IMPORT") return;
 					warn(warning);
 				},
-				onLog(level, log, handler) {
-					// @ts-expect-error
-					if (log.cause?.message?.includes("Can't resolve original location of error.")) return;
-					handler(level, log);
-				},
+                onLog(level, log, handler) {
+                        // @ts-expect-error log.cause is not typed in Rollup yet
+                        if (log.cause?.message?.includes("Can't resolve original location of error.")) return;
+                        handler(level, log);
+                },
 			},
 		},
 		optimizeDeps: {

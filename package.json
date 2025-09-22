@@ -8,7 +8,7 @@
   "scripts": {
     "build": "turbo build",
     "dev": "turbo dev",
-    "lint": "turbo lint",
+    "lint": "eslint apps/web --cache --cache-location ./node_modules/.cache/eslint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "generate-migration": "turbo generate-migration",
     "migrate:local": "turbo migrate:local",
