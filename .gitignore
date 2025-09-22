@@ -52,6 +52,8 @@ yarn-error.log*
 *.key
 **/credentials.*
 **/secrets.*
+.vault*
+vault/
 config.private.*
 
 # Cache
@@ -73,3 +75,7 @@ packages/*/dist/
 # Logs
 *.log
 Codex_Agent_*
+# Python artifacts
+__pycache__/
+*.pyc
+nas_results.json

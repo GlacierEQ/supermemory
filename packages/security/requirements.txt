@@ -1,0 +1,2 @@
+# Optional dependency for HashiCorp Vault integration. Uncomment and install
+# when Vault connectivity is required.
