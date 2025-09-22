@@ -10,7 +10,7 @@
 		"cf-typegen": "wrangler types",
 		"deploy": "cross-env NODE_ENV=production IS_DEPLOYING=true dotenv -- bun run build && wrangler pages deploy",
 		"dev": "dotenv -- wrangler -v && remix vite:dev --port 3000",
-		"lint": "eslint --ignore-path .gitignore --cache --cache-location ./node_modules/.cache/eslint .",
+                "lint": "eslint --cache --cache-location ./node_modules/.cache/eslint .",
 		"preview": "dotenv -- bun run build && wrangler pages dev",
 		"start": "dotenv --  wrangler pages dev ./build/client",
 		"typecheck": "tsc",

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 
 import ChatInputForm from "./ChatInputForm";
@@ -19,14 +19,13 @@ interface ChatProps {
 }
 
 function Chat({ user, chatMessages, initialThreadUuid }: ChatProps) {
-	const {
-		threadUuid,
-		chatMessages: chatMessagesStreamed,
-		input,
-		setInput,
-		sendMessage,
-		isLoading,
-	} = useChatStream(chatMessages, initialThreadUuid);
+        const {
+                chatMessages: chatMessagesStreamed,
+                input,
+                setInput,
+                sendMessage,
+                isLoading,
+        } = useChatStream(chatMessages, initialThreadUuid);
 
 	const [expandedMessageIndexes, setExpandedMessageIndexes] = useState<number[]>([]);
 	const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
@@ -71,7 +70,9 @@ function Chat({ user, chatMessages, initialThreadUuid }: ChatProps) {
 		setShouldAutoScroll(isAtBottom);
 	};
 
-	const renderAttachments = (attachments: any[]) => (
+        const renderAttachments = (
+                attachments: { url: string; name: string }[],
+        ) => (
 		<div className="flex flex-wrap gap-4 mb-4">
 			{attachments.map((attachment) => (
 				<motion.div
@@ -106,7 +107,10 @@ function Chat({ user, chatMessages, initialThreadUuid }: ChatProps) {
 		</div>
 	);
 
-	const renderMessageContent = (content: string | any, isLatestAndLoading: boolean) => (
+        const renderMessageContent = (
+                content: string | React.ReactNode,
+                isLatestAndLoading: boolean,
+        ) => (
 		<motion.div
 			initial={{ opacity: 0 }}
 			animate={{ opacity: 1 }}
