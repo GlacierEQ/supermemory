@@ -13,8 +13,6 @@ import {
   documents,
   spaces,
 } from "@supermemory/db/schema";
-import { embedMany } from "ai";
-import { openai } from "../providers";
 import { chunk } from "@supermemory/db/schema";
 import { NonRetryableError } from "cloudflare:workflows";
 import {
