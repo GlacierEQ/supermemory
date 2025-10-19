@@ -38,6 +38,23 @@ export type Env = {
   BRAINTRUST_API_KEY: string;
   RESEND_API_KEY: string;
   TURNSTILE_SECRET_KEY: string;
+  /**
+   * Optional integrations that power the distributed memory stack. These are
+   * defined as string | undefined so that the worker can feature-detect which
+   * downstream systems are enabled at runtime without crashing in local or
+   * preview environments where credentials are not present.
+   */
+  MEM0_API_KEY?: string;
+  MEM0_BASE_URL?: string;
+  SUPERMEMORY_API_BASE?: string;
+  SUPERMEMORY_ADMIN_TOKEN?: string;
+  NEO4J_URL?: string;
+  NEO4J_USERNAME?: string;
+  NEO4J_PASSWORD?: string;
+  NEO4J_DATABASE?: string;
+  MEMGRAPH_URL?: string;
+  MEMGRAPH_USERNAME?: string;
+  MEMGRAPH_PASSWORD?: string;
 
   MD_CACHE: KVNamespace;
   HYPERDRIVE: Hyperdrive;

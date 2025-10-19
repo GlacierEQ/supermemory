@@ -11,5 +11,78 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  neo4j:
+    image: neo4j:5
+    environment:
+      - NEO4J_AUTH=neo4j/neo4j_password
+      - NEO4J_PLUGINS=[]
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+
+  memgraph:
+    image: memgraph/memgraph-mage:latest
+    ports:
+      - "7444:7444"
+      - "7689:7687"
+    command: ["--log-level", "INFO"]
+    volumes:
+      - memgraph_data:/var/lib/memgraph
+
+  mem0-mcp:
+    image: node:20
+    working_dir: /workspace
+    command:
+      [
+        "npx",
+        "@mem0/mcp-server",
+        "--api-key",
+        "${MEM0_API_KEY:-local-mem0-key}",
+        "--redis-url",
+        "redis://redis:6379",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "9090"
+      ]
+    environment:
+      MEM0_API_KEY: ${MEM0_API_KEY:-local-mem0-key}
+    depends_on:
+      - redis
+    ports:
+      - "9090:9090"
+
+  memoryplugin-mcp:
+    image: node:20
+    command:
+      [
+        "npx",
+        "@memoryplugin/mcp-server",
+        "--token",
+        "${MEMORY_PLUGIN_TOKEN:-local-memory-token}",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "9091"
+      ]
+    environment:
+      MEMORY_PLUGIN_TOKEN: ${MEMORY_PLUGIN_TOKEN:-local-memory-token}
+    ports:
+      - "9091:9091"
+
 volumes:
   postgres_data:
+  redis_data:
+  neo4j_data:
+  neo4j_logs:
+  memgraph_data:

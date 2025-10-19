@@ -8,8 +8,10 @@ import {
   spaceAccess,
   contentToSpace,
 } from "@supermemory/db/schema";
-import { and, database, desc, eq, or, sql, isNull } from "@supermemory/db";
+import { and, database, desc, eq, inArray, or, sql, isNull } from "@supermemory/db";
 import { fromHono } from "chanfana";
+import { removeMemoryTargets } from "../services/memorySync";
+import { bumpMemoryRevision } from "../services/memoryRevision";
 
 const memories = fromHono(new Hono<{ Variables: Variables; Bindings: Env }>())
   .get(
@@ -185,21 +187,16 @@ const memories = fromHono(new Hono<{ Variables: Variables; Bindings: Env }>())
 
       const db = database(c.env.HYPERDRIVE.connectionString);
 
-      let documentIdNum;
-
-      try {
-        documentIdNum = Number(id);
-      } catch (e) {
-        documentIdNum = null;
-      }
+      const numericDocumentId = Number.parseInt(id, 10);
+      const hasNumericId = Number.isInteger(numericDocumentId);
 
       const doc = await db
         .select()
         .from(documents)
         .where(
           and(
-            documentIdNum
-              ? or(eq(documents.uuid, id), eq(documents.id, documentIdNum))
+            hasNumericId
+              ? or(eq(documents.uuid, id), eq(documents.id, numericDocumentId))
               : eq(documents.uuid, id),
             eq(documents.userId, user.id)
           )
@@ -210,7 +207,13 @@ const memories = fromHono(new Hono<{ Variables: Variables; Bindings: Env }>())
         return c.json({ error: "Document not found" }, 404);
       }
 
-      const [document, contentToSpacei] = await Promise.all([
+      const deletionPayload = {
+        documentId: doc[0].id,
+        uuid: doc[0].uuid,
+        userId: doc[0].userId,
+      };
+
+      await Promise.all([
         db
           .delete(documents)
           .where(and(eq(documents.uuid, id), eq(documents.userId, user.id))),
@@ -218,6 +221,10 @@ const memories = fromHono(new Hono<{ Variables: Variables; Bindings: Env }>())
           .delete(contentToSpace)
           .where(eq(contentToSpace.contentId, doc[0].id)),
       ]);
+
+      await removeMemoryTargets(c.env, deletionPayload);
+
+      await bumpMemoryRevision(c.env, user.id);
 
       return c.json({ success: true });
     }
@@ -245,12 +252,7 @@ const memories = fromHono(new Hono<{ Variables: Variables; Bindings: Env }>())
         const docs = await db
           .select()
           .from(documents)
-          .where(
-            and(
-              eq(documents.userId, user.id),
-              sql`${documents.uuid} = ANY(ARRAY[${ids}]::text[])`
-            )
-          );
+          .where(and(eq(documents.userId, user.id), inArray(documents.uuid, ids)));
 
         if (docs.length === 0) {
           return c.json({ error: "No valid documents found" }, 404);
@@ -264,20 +266,25 @@ const memories = fromHono(new Hono<{ Variables: Variables; Bindings: Env }>())
             // Delete document entries
             tx
               .delete(documents)
-              .where(
-                and(
-                  eq(documents.userId, user.id),
-                  sql`${documents.uuid} = ANY(ARRAY[${ids}]::text[])`
-                )
-              ),
+              .where(and(eq(documents.userId, user.id), inArray(documents.uuid, ids))),
             // Delete space connections
             tx
               .delete(contentToSpace)
-              .where(
-                sql`${contentToSpace.contentId} = ANY(ARRAY[${docIds}]::int[])`
-              ),
+              .where(inArray(contentToSpace.contentId, docIds)),
           ]);
         });
+
+        await Promise.all(
+          docs.map((doc) =>
+            removeMemoryTargets(c.env, {
+              documentId: doc.id,
+              uuid: doc.uuid,
+              userId: doc.userId,
+            })
+          )
+        );
+
+        await bumpMemoryRevision(c.env, user.id);
 
         return c.json({
           success: true,

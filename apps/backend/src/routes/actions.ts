@@ -39,6 +39,12 @@ import {
 import { typeDecider } from "../utils/typeDecider";
 import { isErr, Ok } from "../errors/results";
 import { fromHono } from "chanfana";
+import {
+  CachedContextResult,
+  getCachedContext,
+  storeCachedContext,
+} from "../services/contextCache";
+import { getMemoryRevision } from "../services/memoryRevision";
 
 const actions = fromHono(new Hono<{ Variables: Variables; Bindings: Env }>())
   .post(
@@ -104,119 +110,139 @@ const actions = fromHono(new Hono<{ Variables: Variables; Bindings: Env }>())
         return c.json({ error: "Empty query" }, 400);
       }
 
-      // Run embedding generation and thread creation in parallel
-      const [{ data: embedding }, thread] = await Promise.all([
-        c.env.AI.run("@cf/baai/bge-base-en-v1.5", { text: queryText }),
-        !threadId
-          ? db
-              .insert(chatThreads)
-              .values({
-                firstMessage: messages[0].content,
-                userId: user.id,
-                uuid: randomId(),
-                messages: coreMessages,
-              })
-              .returning()
-          : null,
+      const revision = await getMemoryRevision(c.env, user.id);
+
+      const threadPromise = !threadId
+        ? db
+            .insert(chatThreads)
+            .values({
+              firstMessage: messages[0].content,
+              userId: user.id,
+              uuid: randomId(),
+              messages: coreMessages,
+            })
+            .returning()
+        : Promise.resolve(null);
+
+      const [thread, cachedContext] = await Promise.all([
+        threadPromise,
+        getCachedContext(c.env, {
+          userId: user.id,
+          query: queryText,
+          revision,
+        }),
       ]);
 
-      const threadUuid = threadId || thread?.[0].uuid;
-
-      if (!embedding) {
-        return c.json({ error: "Failed to generate embedding" }, 500);
-      }
+      const threadUuid = threadId || thread?.[0]?.uuid;
 
       try {
         const data = new StreamData();
 
-        // Pre-compute the vector similarity expression
-        const vectorSimilarity = sql<number>`1 - (embeddings <=> ${JSON.stringify(embedding[0])}::vector)`;
+        let topResults: CachedContextResult[] = [];
 
-        // Get matching chunks with document info
-        const matchingChunks = await db
-          .select({
-            chunkId: chunk.id,
-            documentId: chunk.documentId,
-            textContent: chunk.textContent,
-            orderInDocument: chunk.orderInDocument,
-            metadata: chunk.metadata,
-            similarity: vectorSimilarity,
-            // Document fields
-            docId: documents.id,
-            docUuid: documents.uuid,
-            docContent: documents.content,
-            docType: documents.type,
-            docUrl: documents.url,
-            docTitle: documents.title,
-            docDescription: documents.description,
-            docOgImage: documents.ogImage,
-          })
-          .from(chunk)
-          .innerJoin(documents, eq(chunk.documentId, documents.id))
-          .where(
-            and(eq(documents.userId, user.id), sql`${vectorSimilarity} > 0.3`)
-          )
-          .orderBy(desc(vectorSimilarity))
-          .limit(25);
+        if (cachedContext) {
+          topResults = cachedContext.results;
+        } else {
+          const { data: embeddingData } = await c.env.AI.run(
+            "@cf/baai/bge-base-en-v1.5",
+            { text: queryText }
+          );
 
-        // Get unique document IDs from matching chunks
-        const uniqueDocIds = [
-          ...new Set(matchingChunks.map((c) => c.documentId)),
-        ];
+          if (!embeddingData || embeddingData.length === 0) {
+            return c.json({ error: "Failed to generate embedding" }, 500);
+          }
 
-        // Fetch all chunks for these documents to get context
-        const contextChunks = await db
-          .select({
-            id: chunk.id,
-            documentId: chunk.documentId,
-            textContent: chunk.textContent,
-            orderInDocument: chunk.orderInDocument,
-            metadata: chunk.metadata,
-          })
-          .from(chunk)
-          .where(inArray(chunk.documentId, uniqueDocIds))
-          .orderBy(chunk.documentId, chunk.orderInDocument);
+          const vectorSimilarity = sql<number>`1 - (embeddings <=> ${JSON.stringify(
+            embeddingData[0]
+          )}::vector)`;
 
-        // Group chunks by document
-        const chunksByDocument = new Map<number, typeof contextChunks>();
-        for (const chunk of contextChunks) {
-          const docChunks = chunksByDocument.get(chunk.documentId) || [];
-          docChunks.push(chunk);
-          chunksByDocument.set(chunk.documentId, docChunks);
+          const matchingChunks = await db
+            .select({
+              chunkId: chunk.id,
+              documentId: chunk.documentId,
+              textContent: chunk.textContent,
+              orderInDocument: chunk.orderInDocument,
+              metadata: chunk.metadata,
+              similarity: vectorSimilarity,
+              docId: documents.id,
+              docUuid: documents.uuid,
+              docContent: documents.content,
+              docType: documents.type,
+              docUrl: documents.url,
+              docTitle: documents.title,
+              docDescription: documents.description,
+              docOgImage: documents.ogImage,
+            })
+            .from(chunk)
+            .innerJoin(documents, eq(chunk.documentId, documents.id))
+            .where(
+              and(eq(documents.userId, user.id), sql`${vectorSimilarity} > 0.3`)
+            )
+            .orderBy(desc(vectorSimilarity))
+            .limit(25);
+
+          const uniqueDocIds = [
+            ...new Set(matchingChunks.map((c) => c.documentId)),
+          ];
+
+          const contextChunks =
+            uniqueDocIds.length === 0
+              ? []
+              : await db
+                  .select({
+                    id: chunk.id,
+                    documentId: chunk.documentId,
+                    textContent: chunk.textContent,
+                    orderInDocument: chunk.orderInDocument,
+                    metadata: chunk.metadata,
+                  })
+                  .from(chunk)
+                  .where(inArray(chunk.documentId, uniqueDocIds))
+                  .orderBy(chunk.documentId, chunk.orderInDocument);
+
+          const chunksByDocument = new Map<number, typeof contextChunks>();
+          for (const chunkItem of contextChunks) {
+            const docChunks = chunksByDocument.get(chunkItem.documentId) || [];
+            docChunks.push(chunkItem);
+            chunksByDocument.set(chunkItem.documentId, docChunks);
+          }
+
+          const contextualResults = matchingChunks.map((match) => {
+            const docChunks = chunksByDocument.get(match.documentId) || [];
+            const matchIndex = docChunks.findIndex((c) => c.id === match.chunkId);
+
+            const start = Math.max(0, matchIndex - 2);
+            const end = Math.min(docChunks.length, matchIndex + 3);
+            const relevantChunks = docChunks.slice(start, end);
+
+            return {
+              id: match.docId,
+              title: match.docTitle,
+              description: match.docDescription,
+              url: match.docUrl,
+              type: match.docType,
+              content: relevantChunks.map((c) => c.textContent).join("\n"),
+              similarity: Number(match.similarity.toFixed(4)),
+              chunks: relevantChunks.map((c) => ({
+                id: c.id,
+                content: c.textContent,
+                orderInDocument: c.orderInDocument,
+                metadata: c.metadata,
+                isMatch: c.id === match.chunkId,
+              })),
+            };
+          });
+
+          topResults = contextualResults
+            .sort((a, b) => b.similarity - a.similarity)
+            .slice(0, 10);
+
+          await storeCachedContext(
+            c.env,
+            { userId: user.id, query: queryText, revision },
+            topResults
+          );
         }
-
-        // Create context with surrounding chunks
-        const contextualResults = matchingChunks.map((match) => {
-          const docChunks = chunksByDocument.get(match.documentId) || [];
-          const matchIndex = docChunks.findIndex((c) => c.id === match.chunkId);
-
-          // Get surrounding chunks (2 before and 2 after for more context)
-          const start = Math.max(0, matchIndex - 2);
-          const end = Math.min(docChunks.length, matchIndex + 3);
-          const relevantChunks = docChunks.slice(start, end);
-
-          return {
-            id: match.docId,
-            title: match.docTitle,
-            description: match.docDescription,
-            url: match.docUrl,
-            type: match.docType,
-            content: relevantChunks.map((c) => c.textContent).join("\n"),
-            similarity: Number(match.similarity.toFixed(4)),
-            chunks: relevantChunks.map((c) => ({
-              id: c.id,
-              content: c.textContent,
-              orderInDocument: c.orderInDocument,
-              metadata: c.metadata,
-              isMatch: c.id === match.chunkId,
-            })),
-          };
-        });
-
-        // Sort by similarity and take top results
-        const topResults = contextualResults
-          .sort((a, b) => b.similarity - a.similarity)
-          .slice(0, 10);
 
         data.appendMessageAnnotation(topResults);
 

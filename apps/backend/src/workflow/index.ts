@@ -13,10 +13,15 @@ import {
   documents,
   spaces,
 } from "@supermemory/db/schema";
-import { embedMany } from "ai";
-import { openai } from "../providers";
 import { chunk } from "@supermemory/db/schema";
 import { NonRetryableError } from "cloudflare:workflows";
+import {
+  MemorySyncPayload,
+  ensureDocumentTracking,
+  syncMemoryTargets,
+  computeContentHash,
+} from "../services/memorySync";
+import { bumpMemoryRevision } from "../services/memoryRevision";
 
 // TODO: handle errors properly here.
 
@@ -146,6 +151,8 @@ export class ContentWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
       );
     }
 
+    const persistedDocument = document[0];
+
     // Step 3: Generate embeddings
     const { data: embeddings } = await this.env.AI.run(
       "@cf/baai/bge-base-en-v1.5",
@@ -159,7 +166,7 @@ export class ContentWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
       "prepare chunk data",
       async () =>
         chunked.map((chunk, index) => ({
-          documentId: document[0].id,
+          documentId: persistedDocument.id,
           textContent: chunk,
           orderInDocument: index,
           embeddings: embeddings[index],
@@ -195,7 +202,7 @@ export class ContentWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
             // Then insert the content-space mappings using the actual space IDs
             await trx.insert(contentToSpace).values(
               spaceIds.map((space) => ({
-                contentId: document[0].id,
+                contentId: persistedDocument.id,
                 spaceId: space.id,
               }))
             );
@@ -204,6 +211,38 @@ export class ContentWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
       });
     }
 
+    const normalizedContent =
+      (rawContent as { contentToSave?: string }).contentToSave ??
+      rawContent.contentToVectorize;
+
+    const syncPayload: MemorySyncPayload = {
+      documentId: persistedDocument.id,
+      uuid: persistedDocument.uuid,
+      userId: persistedDocument.userId,
+      title: persistedDocument.title ?? rawContent.title,
+      type: persistedDocument.type ?? event.payload.type,
+      url: persistedDocument.url ?? event.payload.url ?? null,
+      spaces: event.payload.spaces ?? [],
+      content: normalizedContent,
+      chunkCount: chunkInsertData.length,
+      createdAt:
+        persistedDocument.createdAt instanceof Date
+          ? persistedDocument.createdAt.toISOString()
+          : new Date().toISOString(),
+      updatedAt:
+        persistedDocument.updatedAt instanceof Date
+          ? persistedDocument.updatedAt.toISOString()
+          : new Date().toISOString(),
+    };
+
+    const contentHash = await computeContentHash(syncPayload.content);
+
+    await ensureDocumentTracking(this.env, syncPayload, { contentHash });
+
+    await step.do("sync distributed memory stack", async () => {
+      await syncMemoryTargets(this.env, syncPayload, { contentHash });
+    });
+
     // Step 7: Mark the document as successfully processed
     await step.do("mark document as successfully processed", async () => {
       await database(this.env.HYPERDRIVE.connectionString)
@@ -211,7 +250,11 @@ export class ContentWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
         .set({
           isSuccessfullyProcessed: true,
         })
-        .where(eq(documents.id, document[0].id));
+        .where(eq(documents.id, persistedDocument.id));
+    });
+
+    await step.do("refresh memory revision", async () => {
+      await bumpMemoryRevision(this.env, persistedDocument.userId);
     });
   }
 }
