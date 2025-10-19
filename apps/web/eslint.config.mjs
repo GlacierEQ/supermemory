@@ -95,44 +95,87 @@ export default [
 			},
 		},
 	},
-	...fixupConfigRules(
-		compat.extends(
-			"plugin:@typescript-eslint/recommended",
-			"plugin:import/recommended",
-			"plugin:import/typescript",
-			"plugin:drizzle/recommended",
-		),
-	).map((config) => ({
-		...config,
-		files: ["**/*.{ts,tsx}"],
-	})),
-	{
-		files: ["**/*.{ts,tsx}"],
+        ...fixupConfigRules(
+                compat.extends(
+                        "plugin:@typescript-eslint/recommended",
+                        "plugin:import/recommended",
+                        "plugin:import/typescript",
+                        "plugin:drizzle/recommended",
+                ),
+        ).map((config) => ({
+                ...config,
+                files: ["**/*.{ts,tsx}"],
+        })),
+        {
+                files: ["**/*.{ts,tsx}"],
 
-		plugins: {
-			"@typescript-eslint": fixupPluginRules(typescriptEslint),
-			import: fixupPluginRules(_import),
-			drizzle: fixupPluginRules(drizzle),
-		},
+                plugins: {
+                        "@typescript-eslint": fixupPluginRules(typescriptEslint),
+                        import: fixupPluginRules(_import),
+                        drizzle: fixupPluginRules(drizzle),
+                },
 
-		languageOptions: {
-			parser: tsParser,
-		},
+                languageOptions: {
+                        parser: tsParser,
+                },
 
-		settings: {
-			"import/internal-regex": "^~/",
+                settings: {
+                        "import/internal-regex": "^~/",
 
-			"import/resolver": {
-				node: {
-					extensions: [".ts", ".tsx"],
-				},
+                        "import/resolver": {
+                                node: {
+                                        extensions: [".ts", ".tsx"],
+                                },
 
-				typescript: {
-					alwaysTryTypes: true,
-				},
-			},
-		},
-	},
+                                typescript: {
+                                        alwaysTryTypes: true,
+                                },
+                        },
+                },
+        },
+        {
+                files: ["**/*.{js,jsx,ts,tsx}"],
+                plugins: {
+                        "@typescript-eslint": fixupPluginRules(typescriptEslint),
+                        react: fixupPluginRules(react),
+                        "jsx-a11y": fixupPluginRules(jsxA11Y),
+                        import: fixupPluginRules(_import),
+                        drizzle: fixupPluginRules(drizzle),
+                },
+                rules: {
+                        "react/prop-types": "off",
+                        "import/no-named-as-default": "off",
+                        "import/no-named-as-default-member": "off",
+                        "import/no-unresolved": "off",
+                        "@typescript-eslint/no-unused-vars": [
+                                "warn",
+                                { argsIgnorePattern: "^_", varsIgnorePattern: "^_", ignoreRestSiblings: true },
+                        ],
+                        "@typescript-eslint/no-explicit-any": "off",
+                        "@typescript-eslint/ban-ts-comment": "off",
+                        "@typescript-eslint/no-require-imports": "off",
+                        "@typescript-eslint/no-empty-object-type": "off",
+                        "no-useless-escape": "off",
+                        "jsx-a11y/no-autofocus": "off",
+                        "react/no-unknown-property": "off",
+                        "react/no-unescaped-entities": "off",
+                        "react-hooks/exhaustive-deps": "warn",
+                        "drizzle/enforce-delete-with-where": "off",
+                        "jsx-a11y/anchor-has-content": "off",
+                        "react/jsx-no-target-blank": "off",
+                        "jsx-a11y/iframe-has-title": "off",
+                        "prefer-const": "off",
+                        "react-hooks/rules-of-hooks": "off",
+                        "no-constant-binary-expression": "off",
+                        "valid-typeof": "off",
+                        "jsx-a11y/no-redundant-roles": "off",
+                        "jsx-a11y/anchor-is-valid": "off",
+                        "jsx-a11y/click-events-have-key-events": "off",
+                        "jsx-a11y/no-static-element-interactions": "off",
+                        "react/display-name": "off",
+                        "jsx-a11y/alt-text": "off",
+                },
+        },
 	{
 		files: ["**/.eslintrc.cjs"],
 
