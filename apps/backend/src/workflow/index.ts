@@ -21,6 +21,7 @@ import {
   syncMemoryTargets,
   computeContentHash,
 } from "../services/memorySync";
+import { bumpMemoryRevision } from "../services/memoryRevision";
 
 // TODO: handle errors properly here.
 
@@ -250,6 +251,10 @@ export class ContentWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
           isSuccessfullyProcessed: true,
         })
         .where(eq(documents.id, persistedDocument.id));
+    });
+
+    await step.do("refresh memory revision", async () => {
+      await bumpMemoryRevision(this.env, persistedDocument.userId);
     });
   }
 }

@@ -11,6 +11,7 @@ import {
 import { and, database, desc, eq, inArray, or, sql, isNull } from "@supermemory/db";
 import { fromHono } from "chanfana";
 import { removeMemoryTargets } from "../services/memorySync";
+import { bumpMemoryRevision } from "../services/memoryRevision";
 
 const memories = fromHono(new Hono<{ Variables: Variables; Bindings: Env }>())
   .get(
@@ -223,6 +224,8 @@ const memories = fromHono(new Hono<{ Variables: Variables; Bindings: Env }>())
 
       await removeMemoryTargets(c.env, deletionPayload);
 
+      await bumpMemoryRevision(c.env, user.id);
+
       return c.json({ success: true });
     }
   )
@@ -280,6 +283,8 @@ const memories = fromHono(new Hono<{ Variables: Variables; Bindings: Env }>())
             })
           )
         );
+
+        await bumpMemoryRevision(c.env, user.id);
 
         return c.json({
           success: true,

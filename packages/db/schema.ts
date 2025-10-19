@@ -11,6 +11,7 @@ import {
   timestamp,
   uniqueIndex,
   jsonb,
+  bigint as pgBigInt,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { Metadata } from "../../apps/backend/src/types";
@@ -245,6 +246,26 @@ export const chunk = pgTable(
 );
 
 
+export const memoryRevisions = pgTable(
+  "memory_revisions",
+  {
+    userId: integer("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull()
+      .primaryKey(),
+    revision: pgBigInt("revision", { mode: "number" })
+      .notNull()
+      .default(0),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    updatedIdx: index("memory_revisions_updated_idx").on(table.updatedAt),
+  })
+);
+
+
 export const externalMemoryTargets = pgTable(
   "external_memory_targets",
   {
@@ -297,3 +318,4 @@ export type ChunkInsert = typeof chunk.$inferInsert;
 export type DocumentType = typeof documentType.$inferSelect;
 export type ContentToSpace = typeof contentToSpace.$inferSelect;
 export type ExternalMemoryTarget = typeof externalMemoryTargets.$inferSelect;
+export type MemoryRevision = typeof memoryRevisions.$inferSelect;
