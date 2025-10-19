@@ -10,6 +10,7 @@ import {
 } from "@supermemory/db/schema";
 import { and, database, desc, eq, or, sql, isNull } from "@supermemory/db";
 import { fromHono } from "chanfana";
+import { removeMemoryTargets } from "../services/memorySync";
 
 const memories = fromHono(new Hono<{ Variables: Variables; Bindings: Env }>())
   .get(
@@ -210,7 +211,13 @@ const memories = fromHono(new Hono<{ Variables: Variables; Bindings: Env }>())
         return c.json({ error: "Document not found" }, 404);
       }
 
-      const [document, contentToSpacei] = await Promise.all([
+      const deletionPayload = {
+        documentId: doc[0].id,
+        uuid: doc[0].uuid,
+        userId: doc[0].userId,
+      };
+
+      await Promise.all([
         db
           .delete(documents)
           .where(and(eq(documents.uuid, id), eq(documents.userId, user.id))),
@@ -218,6 +225,8 @@ const memories = fromHono(new Hono<{ Variables: Variables; Bindings: Env }>())
           .delete(contentToSpace)
           .where(eq(contentToSpace.contentId, doc[0].id)),
       ]);
+
+      await removeMemoryTargets(c.env, deletionPayload);
 
       return c.json({ success: true });
     }
@@ -278,6 +287,16 @@ const memories = fromHono(new Hono<{ Variables: Variables; Bindings: Env }>())
               ),
           ]);
         });
+
+        await Promise.all(
+          docs.map((doc) =>
+            removeMemoryTargets(c.env, {
+              documentId: doc.id,
+              uuid: doc.uuid,
+              userId: doc.userId,
+            })
+          )
+        );
 
         return c.json({
           success: true,

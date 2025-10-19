@@ -1,0 +1,24 @@
+# Core credentials (populate existing secrets before running `wrangler dev`)
+WORKOS_API_KEY=
+WORKOS_CLIENT_ID=
+WORKOS_COOKIE_PASSWORD=
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/supermemorylocal
+GEMINI_API_KEY=
+NODE_ENV=development
+OPEN_AI_API_KEY=
+BRAINTRUST_API_KEY=
+RESEND_API_KEY=
+TURNSTILE_SECRET_KEY=
+
+# Distributed memory integrations
+MEM0_API_KEY=local-mem0-key
+MEM0_BASE_URL=http://localhost:9090
+SUPERMEMORY_API_BASE=http://localhost:8787
+SUPERMEMORY_ADMIN_TOKEN=dev-admin-token
+NEO4J_URL=http://localhost:7474
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=neo4j_password
+NEO4J_DATABASE=neo4j
+MEMGRAPH_URL=http://localhost:7444
+MEMGRAPH_USERNAME=
+MEMGRAPH_PASSWORD=

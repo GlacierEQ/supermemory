@@ -245,6 +245,40 @@ export const chunk = pgTable(
 );
 
 
+export const externalMemoryTargets = pgTable(
+  "external_memory_targets",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    documentId: integer("document_id")
+      .notNull()
+      .references(() => documents.id, { onDelete: "cascade" }),
+    target: text("target").notNull(),
+    externalId: text("external_id"),
+    status: text("status").notNull().default("pending"),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    error: text("error"),
+    metadata: jsonb("metadata"),
+    retryCount: integer("retry_count").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    docTargetIdx: uniqueIndex("external_targets_doc_target_idx").on(
+      table.documentId,
+      table.target
+    ),
+    targetStatusIdx: index("external_targets_status_idx").on(
+      table.target,
+      table.status
+    ),
+  })
+);
+
+
 export const waitlist = pgTable("waitlist", {
   email: varchar("email", { length: 512 }).primaryKey(),
   createdAt: timestamp("created_at", { withTimezone: true })
@@ -262,3 +296,4 @@ export type Chunk = typeof chunk.$inferSelect;
 export type ChunkInsert = typeof chunk.$inferInsert;
 export type DocumentType = typeof documentType.$inferSelect;
 export type ContentToSpace = typeof contentToSpace.$inferSelect;
+export type ExternalMemoryTarget = typeof externalMemoryTargets.$inferSelect;
