@@ -15,7 +15,7 @@
     "@hono/zod-openapi": "^0.18.3",
     "@hono/zod-validator": "^0.4.1",
     "@supermemory/db": "workspace:*",
-    "ai": "4.0.16",
+    "ai": "5.0.52",
     "compromise": "^14.14.2",
     "dotenv": "^16.4.5",
     "drizzle-kit": "^0.25.0",
