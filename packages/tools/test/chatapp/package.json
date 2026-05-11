@@ -11,8 +11,8 @@
   "dependencies": {
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "next": "16.0.0",
-    "ai": "^4.0.0",
+    "next": "16.2.5",
+    "ai": "^6.0.177",
     "@ai-sdk/openai": "^1.0.0",
     "openai": "^4.104.0",
     "supermemory": "^1.0.0",
