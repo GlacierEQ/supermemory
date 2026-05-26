@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { memo, useState } from "react"
 import type { DocumentsWithMemoriesResponseSchema } from "@repo/validation/api"
 import type { z } from "zod"
 
@@ -12,7 +12,7 @@ type OgData = {
 	image?: string
 }
 
-export function WebsitePreview({
+export const WebsitePreview = memo(function WebsitePreview({
 	document,
 	ogData,
 }: {
@@ -32,7 +32,7 @@ export function WebsitePreview({
 					<img
 						src={displayOgImage}
 						alt={document.title || "Website preview"}
-						className="w-full h-full object-cover"
+						className="size-full object-cover"
 						onError={() => setImageError(true)}
 						loading="lazy"
 					/>
@@ -40,4 +40,4 @@ export function WebsitePreview({
 			) : null}
 		</div>
 	)
-}
+})

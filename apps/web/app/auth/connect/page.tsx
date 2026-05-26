@@ -7,8 +7,10 @@ import { dmSans125ClassName } from "@/lib/fonts"
 import { useCustomer } from "autumn-js/react"
 import { ArrowRight, Loader, XCircle } from "lucide-react"
 import Image from "next/image"
-import { useSearchParams } from "next/navigation"
-import { Suspense, useState } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
+import { Suspense, useEffect, useState } from "react"
+
+import { PENDING_CONNECT_URL_KEY } from "@/lib/constants"
 
 const API_URL =
 	process.env.NEXT_PUBLIC_BACKEND_URL ?? "https://api.supermemory.ai"
@@ -67,6 +69,16 @@ const PLUGIN_INFO: Record<string, PluginInfo> = {
 		],
 		icon: "/images/plugins/openclaw.svg",
 	},
+	hermes: {
+		name: "Hermes",
+		description: "Memory layer for Hermes agent",
+		features: [
+			"Semantic search across previous sessions",
+			"Auto-capture of conversation context",
+			"Builds persistent user profile from interactions",
+		],
+		icon: "/images/plugins/hermes.svg",
+	},
 	cursor: {
 		name: "Cursor",
 		description:
@@ -77,6 +89,17 @@ const PLUGIN_INFO: Record<string, PluginInfo> = {
 			"Context-aware suggestions",
 		],
 		icon: "/images/plugins/cursor.svg",
+	},
+	codex: {
+		name: "OpenAI Codex",
+		description:
+			"Persistent memory for OpenAI Codex CLI. Remembers your coding context, patterns, and decisions across sessions.",
+		features: [
+			"Auto-recalls relevant context before each prompt",
+			"Captures coding decisions and patterns automatically",
+			"Builds persistent user profile across projects",
+		],
+		icon: "/images/plugins/codex.svg",
 	},
 }
 
@@ -95,8 +118,9 @@ const cardClass = cn(
 
 function AuthConnectContent() {
 	const params = useSearchParams()
+	const router = useRouter()
 	const { data: session, isPending } = useSession()
-	const { org } = useAuth()
+	const { org, organizations, isRestoring } = useAuth()
 	const autumn = useCustomer()
 	const [status, setStatus] = useState<Status>("loading")
 	const [error, setError] = useState<string | null>(null)
@@ -107,6 +131,29 @@ function AuthConnectContent() {
 	const validClient = client && client in PLUGIN_INFO ? client : null
 	const displayName = validClient ? getPluginName(validClient) : "External Tool"
 	const pluginInfo = validClient ? PLUGIN_INFO[validClient] : null
+
+	// Redirect new users (logged in but no organization) to onboarding.
+	// Store the current connect URL so onboarding can redirect back here.
+	const shouldRedirectToOnboarding =
+		!isPending &&
+		!isRestoring &&
+		!!session &&
+		Array.isArray(organizations) &&
+		organizations.length === 0
+
+	useEffect(() => {
+		if (isPending || isRestoring) return
+		if (!session) return
+		if (organizations === null) return // orgs query still pending
+		if (organizations.length > 0) return // has orgs, nothing to do
+
+		try {
+			sessionStorage.setItem(PENDING_CONNECT_URL_KEY, window.location.href)
+		} catch (e) {
+			console.warn("Failed to access sessionStorage for pending connect URL", e)
+		}
+		router.replace("/onboarding")
+	}, [isPending, isRestoring, session, organizations, router])
 
 	async function handleConnect() {
 		if (!callback) {
@@ -119,7 +166,13 @@ function AuthConnectContent() {
 			setError("Invalid callback URL.")
 			return
 		}
-		if (!session || !org) return
+		if (!session || !org) {
+			setStatus("error")
+			setError(
+				"Your account is not fully set up yet. Please complete onboarding first.",
+			)
+			return
+		}
 
 		try {
 			setStatus("creating")
@@ -159,7 +212,7 @@ function AuthConnectContent() {
 			setIsUpgrading(true)
 			const safeSuccessUrl = `${window.location.origin}${window.location.pathname}?callback=${encodeURIComponent(callback ?? "")}&client=${encodeURIComponent(validClient ?? "")}`
 			await autumn.attach({
-				productId: "api_pro",
+				planId: "api_pro",
 				successUrl: safeSuccessUrl,
 			})
 		} catch (err) {
@@ -168,7 +221,10 @@ function AuthConnectContent() {
 		}
 	}
 
-	if (isPending) {
+	// Show a spinner while session/org data is loading or while we're about
+	// to redirect to onboarding (prevents a brief flash of the connect card).
+	const isAuthLoading = isPending || isRestoring || organizations === null
+	if (isAuthLoading || shouldRedirectToOnboarding) {
 		return (
 			<div className="flex items-center justify-center min-h-screen bg-background">
 				<div className="size-6 border-2 border-[#4BA0FA] border-t-transparent rounded-full animate-spin" />
@@ -181,7 +237,7 @@ function AuthConnectContent() {
 			<div className={pageWrapperClass}>
 				<div className={cardClass}>
 					<div className="flex flex-col items-center gap-5">
-						<div className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#1E293B] bg-[#080B0F]">
+						<div className="flex size-10 items-center justify-center rounded-lg border border-[#1E293B] bg-[#080B0F]">
 							{pluginInfo ? (
 								<Image
 									alt={pluginInfo.name}
@@ -260,7 +316,7 @@ function AuthConnectContent() {
 			<div className={pageWrapperClass}>
 				<div className={cardClass}>
 					<div className="flex flex-col items-center gap-5">
-						<div className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#1E293B] bg-[#080B0F]">
+						<div className="flex size-10 items-center justify-center rounded-lg border border-[#1E293B] bg-[#080B0F]">
 							{pluginInfo ? (
 								<Image
 									alt={pluginInfo.name}
@@ -330,7 +386,7 @@ function AuthConnectContent() {
 							{isUpgrading || autumn.isLoading ? (
 								<>
 									<Loader className="size-4 animate-spin mr-2" />
-									Upgrading...
+									Upgrading…
 								</>
 							) : (
 								"Upgrade to Pro \u2014 $19/month"
@@ -339,7 +395,7 @@ function AuthConnectContent() {
 						</button>
 
 						<a
-							href="https://app.supermemory.ai/?view=integrations/plugins"
+							href="https://app.supermemory.ai/?view=plugins"
 							className={dmSans125ClassName(
 								"text-[12px] text-[#737373] hover:text-[#FAFAFA] transition-colors",
 							)}
@@ -408,9 +464,9 @@ function AuthConnectContent() {
 			<div className="flex flex-col items-center gap-3">
 				<div className="size-6 border-2 border-[#4BA0FA] border-t-transparent rounded-full animate-spin" />
 				<p className={dmSans125ClassName("text-sm text-[#737373]")}>
-					{status === "creating" && `Connecting ${displayName}...`}
+					{status === "creating" && `Connecting ${displayName}…`}
 					{status === "success" &&
-						`Success! Redirecting back to ${displayName}...`}
+						`Success! Redirecting back to ${displayName}…`}
 				</p>
 			</div>
 		</div>

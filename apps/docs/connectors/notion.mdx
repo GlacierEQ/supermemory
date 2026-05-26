@@ -149,6 +149,15 @@ After user grants workspace access, Notion redirects to your callback URL. The c
   </Tab>
 </Tabs>
 
+## Document limit
+
+Each connection has a **`documentLimit`** (optional when creating the connection; allowed range **1–10,000**). For Notion, each sync run asks the Notion Search API for **pages** shared with the integration, ordered by **last edited time, newest first**, and **stops after that many pages** (or when Search has no more results).
+
+- **Full sync:** If your workspace has more shareable pages than `documentLimit`, the rest are **not** included in that run. Pages that look “missing” are often older or less recently edited relative to that ordering. Increase `documentLimit` or trigger another sync after pages change if you need broader coverage.
+- **Incremental sync:** Only pages edited **after** the previous sync are candidates; each one still counts toward the same `documentLimit`. If more pages changed than the limit since last sync, only the first batch in that newest-first order is returned for that run.
+
+Nested and child pages still count as normal pages in Search if the integration can access them—they are not skipped *because* they are nested. The limit applies to **how many pages** are fetched per sync, not to depth.
+
 ## Supported Content Types
 
 ### Notion Pages
@@ -404,7 +413,7 @@ const projectWithStatus = await client.search.documents({
 
 ### Optimization Strategies
 
-1. **Set appropriate document limits** based on workspace size
+1. **Set `documentLimit` high enough** for your workspace size (see [Document limit](#document-limit))
 2. **Use targeted container tags** for efficient organization
 3. **Monitor database sync performance** for large datasets
 4. **Implement content filtering** to sync only relevant pages

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { memo, useCallback, useState } from "react"
 import type { DocumentsWithMemoriesResponseSchema } from "@repo/validation/api"
 import type { z } from "zod"
 import { dmSansClassName } from "@/lib/fonts"
@@ -43,8 +43,13 @@ function getFileTypeInfo(document: DocumentWithMemories): {
 	}
 }
 
-export function FilePreview({ document }: { document: DocumentWithMemories }) {
+export const FilePreview = memo(function FilePreview({
+	document,
+}: {
+	document: DocumentWithMemories
+}) {
 	const [imageError, setImageError] = useState(false)
+	const [retryKey, setRetryKey] = useState(0)
 	const { extension, color } = getFileTypeInfo(document)
 
 	const type = document.type?.toLowerCase()
@@ -53,6 +58,17 @@ export function FilePreview({ document }: { document: DocumentWithMemories }) {
 		(mimeType?.startsWith("image/") || type === "image") &&
 		document.url &&
 		!imageError
+
+	// On first failure, wait briefly then force a re-render with a new key to
+	// retry the fetch (covers transient R2 timing issues).
+	// On second failure, give up and show the fallback file icon view.
+	const handleImageError = useCallback(() => {
+		if (retryKey === 0) {
+			setTimeout(() => setRetryKey(1), 500)
+			return
+		}
+		setImageError(true)
+	}, [retryKey])
 
 	return (
 		<div className="bg-[#0B1017] rounded-[18px] gap-3 relative overflow-hidden">
@@ -76,10 +92,11 @@ export function FilePreview({ document }: { document: DocumentWithMemories }) {
 					/>
 					<div className="absolute inset-0 bg-black/20" />
 					<img
+						key={retryKey}
 						src={document.url}
 						alt={document.title || "Image preview"}
-						className="relative max-w-full max-h-full w-auto h-auto object-contain z-10"
-						onError={() => setImageError(true)}
+						className="relative max-w-full max-h-full size-auto object-contain z-10"
+						onError={handleImageError}
 						loading="lazy"
 					/>
 				</div>
@@ -89,17 +106,17 @@ export function FilePreview({ document }: { document: DocumentWithMemories }) {
 						<DocumentIcon
 							type={document.type}
 							url={document.url}
-							className="w-4 h-4"
+							className="size-4"
 						/>
 						<p
-							className={cn(dmSansClassName(), "text-[10px] font-semibold")}
+							className={cn(dmSansClassName(), "text-[11px] font-semibold")}
 							style={{ color: color }}
 						>
 							{extension}
 						</p>
 					</div>
 					{document.content && (
-						<p className="text-[10px] text-[#737373] line-clamp-4">
+						<p className="text-[11px] text-[#737373] line-clamp-4">
 							{document.content}
 						</p>
 					)}
@@ -107,4 +124,4 @@ export function FilePreview({ document }: { document: DocumentWithMemories }) {
 			)}
 		</div>
 	)
-}
+})

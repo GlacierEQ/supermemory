@@ -29,6 +29,7 @@ export function MemoryGraph({
 	canvasRef: externalCanvasRef,
 	colors: colorOverrides,
 	totalCount,
+	onOpenDocument,
 }: MemoryGraphProps) {
 	const resolvedColors = useGraphTheme(colorOverrides)
 	const colors = useMemo<GraphThemeColors>(
@@ -78,6 +79,10 @@ export function MemoryGraph({
 		containerSize.height,
 		colors,
 	)
+	const isCompactViewport = containerSize.width > 0 && containerSize.width < 640
+	const graphFitHeight = isCompactViewport
+		? Math.max(containerSize.height - 170, 240)
+		: containerSize.height
 
 	// Rebuild version chain index during render (not in an effect) so that
 	// the chain data is up-to-date when getChain() is called in useMemo below.
@@ -126,7 +131,8 @@ export function MemoryGraph({
 		}
 	}, [])
 
-	// Auto-fit when data first loads
+	// Auto-fit when data first loads. Mobile needs a few passes because the
+	// force simulation can move nodes after the first layout frame.
 	const hasAutoFittedRef = useRef(false)
 	useEffect(() => {
 		if (
@@ -135,21 +141,46 @@ export function MemoryGraph({
 			viewportRef.current &&
 			containerSize.width > 0
 		) {
-			const timer = setTimeout(() => {
-				viewportRef.current?.fitToNodes(
-					nodes,
-					containerSize.width,
-					containerSize.height,
-				)
-				hasAutoFittedRef.current = true
-			}, 100)
-			return () => clearTimeout(timer)
+			const fitDelays = isCompactViewport ? [100, 450, 900] : [100]
+			const timers = fitDelays.map((delay, index) =>
+				setTimeout(() => {
+					viewportRef.current?.fitToNodes(
+						nodes,
+						containerSize.width,
+						graphFitHeight,
+					)
+					if (index === fitDelays.length - 1) {
+						hasAutoFittedRef.current = true
+					}
+				}, delay),
+			)
+			return () => {
+				for (const timer of timers) clearTimeout(timer)
+			}
 		}
-	}, [nodes, containerSize.width, containerSize.height])
+	}, [nodes, containerSize.width, graphFitHeight, isCompactViewport])
+
+	useEffect(() => {
+		if (!isCompactViewport || nodes.length === 0 || !viewportRef.current) return
+		const timer = setTimeout(() => {
+			viewportRef.current?.fitToNodes(
+				nodes,
+				containerSize.width,
+				graphFitHeight,
+			)
+		}, 120)
+		return () => clearTimeout(timer)
+	}, [isCompactViewport, nodes, containerSize.width, graphFitHeight])
 
 	useEffect(() => {
 		if (nodes.length === 0) hasAutoFittedRef.current = false
 	}, [nodes.length])
+
+	useEffect(() => {
+		if (isCompactViewport) {
+			hasAutoFittedRef.current = false
+		}
+	}, [isCompactViewport])
 
 	// Container resize observer
 	useEffect(() => {
@@ -185,28 +216,69 @@ export function MemoryGraph({
 		// Drag end handled by InputHandler
 	}, [])
 
+	// Load more when user zooms out enough that visible area dwarfs the node extent
+	const loadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+	const loadMoreRef = useRef({ hasMore, isLoadingMore, onLoadMore })
+	loadMoreRef.current = { hasMore, isLoadingMore, onLoadMore }
 	const handleViewportChange = useCallback(
 		(zoom: number, popoverVisible: boolean) => {
 			setZoomDisplay(Math.round(zoom * 100))
-			// Only increment viewportVersion (which triggers popover repositioning
-			// via activePopoverPosition useMemo) when a popover is actually visible.
-			// This avoids 60fps React reconciliation during plain panning/zooming.
 			if (popoverVisible) {
 				setViewportVersion((v) => v + 1)
 			}
+
+			const {
+				hasMore: more,
+				isLoadingMore: loading,
+				onLoadMore: load,
+			} = loadMoreRef.current
+			if (!more || loading || !load || !viewportRef.current) return
+
+			const vp = viewportRef.current
+			const currentNodes = nodes
+			if (currentNodes.length === 0) return
+
+			const topLeft = vp.screenToWorld(0, 0)
+			const bottomRight = vp.screenToWorld(
+				containerSize.width,
+				containerSize.height,
+			)
+			const viewW = bottomRight.x - topLeft.x
+			const viewH = bottomRight.y - topLeft.y
+
+			let minX = Number.POSITIVE_INFINITY
+			let minY = Number.POSITIVE_INFINITY
+			let maxX = Number.NEGATIVE_INFINITY
+			let maxY = Number.NEGATIVE_INFINITY
+			for (const n of currentNodes) {
+				if (n.x < minX) minX = n.x
+				if (n.y < minY) minY = n.y
+				if (n.x > maxX) maxX = n.x
+				if (n.y > maxY) maxY = n.y
+			}
+
+			const nodeW = maxX - minX || 1
+			const nodeH = maxY - minY || 1
+
+			// Only trigger when the visible area is 3x larger than the node extent
+			// (i.e. user has zoomed out significantly past the data)
+			const zoomedOut = viewW > nodeW * 3 || viewH > nodeH * 3
+
+			if (zoomedOut && !loadMoreTimerRef.current) {
+				loadMoreTimerRef.current = setTimeout(() => {
+					loadMoreTimerRef.current = null
+					loadMoreRef.current.onLoadMore?.()
+				}, 500)
+			}
 		},
-		[],
+		[nodes, containerSize.width, containerSize.height],
 	)
 
 	// Navigation
 	const handleAutoFit = useCallback(() => {
 		if (nodes.length === 0 || !viewportRef.current) return
-		viewportRef.current.fitToNodes(
-			nodes,
-			containerSize.width,
-			containerSize.height,
-		)
-	}, [nodes, containerSize.width, containerSize.height])
+		viewportRef.current.fitToNodes(nodes, containerSize.width, graphFitHeight)
+	}, [nodes, containerSize.width, graphFitHeight])
 
 	const handleCenter = useCallback(() => {
 		if (nodes.length === 0 || !viewportRef.current) return
@@ -220,21 +292,33 @@ export function MemoryGraph({
 			sx / nodes.length,
 			sy / nodes.length,
 			containerSize.width,
-			containerSize.height,
+			graphFitHeight,
 		)
-	}, [nodes, containerSize.width, containerSize.height])
+	}, [nodes, containerSize.width, graphFitHeight])
 
 	const handleZoomIn = useCallback(() => {
 		const vp = viewportRef.current
 		if (!vp) return
-		vp.zoomTo(vp.zoom * 1.3, containerSize.width / 2, containerSize.height / 2)
-	}, [containerSize.width, containerSize.height])
+		vp.zoomTo(vp.zoom * 1.3, containerSize.width / 2, graphFitHeight / 2)
+	}, [containerSize.width, graphFitHeight])
 
 	const handleZoomOut = useCallback(() => {
 		const vp = viewportRef.current
 		if (!vp) return
-		vp.zoomTo(vp.zoom / 1.3, containerSize.width / 2, containerSize.height / 2)
-	}, [containerSize.width, containerSize.height])
+		vp.zoomTo(vp.zoom / 1.3, containerSize.width / 2, graphFitHeight / 2)
+	}, [containerSize.width, graphFitHeight])
+
+	// Wrap onOpenDocument to dismiss the popover before opening the modal.
+	// Without this, the popover (z-index: 100) stays mounted on top of the
+	// document modal (z-50), obscuring it and intercepting clicks.
+	const handleOpenDocument = useCallback(
+		(documentId: string) => {
+			setSelectedNode(null)
+			setHoveredNode(null)
+			onOpenDocument?.(documentId)
+		},
+		[onOpenDocument],
+	)
 
 	// Keyboard shortcuts — using useEffect with keydown listener
 	useEffect(() => {
@@ -427,7 +511,6 @@ export function MemoryGraph({
 	const onSlideshowNodeChangeRef = useRef(onSlideshowNodeChange)
 	onSlideshowNodeChangeRef.current = onSlideshowNodeChange
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: reads from refs to avoid resetting interval on resize/node changes
 	useEffect(() => {
 		if (!isSlideshowActive || nodes.length === 0) {
 			if (!isSlideshowActive) {
@@ -452,7 +535,8 @@ export function MemoryGraph({
 				idx = 0
 			}
 			lastIdx = idx
-			const n = currentNodes[idx]!
+			const n = currentNodes[idx]
+			if (!n) return
 			setSelectedNode(n.id)
 			const sz = containerSizeRef.current
 			viewportRef.current?.centerOn(n.x, n.y, sz.width, sz.height)
@@ -509,7 +593,7 @@ export function MemoryGraph({
 			display: "flex",
 			alignItems: "center",
 			justifyContent: "center",
-			backgroundColor: colors.bg,
+			backgroundColor: "transparent",
 			borderRadius: 12,
 		}
 
@@ -535,9 +619,7 @@ export function MemoryGraph({
 		height: "100%",
 		borderRadius: 12,
 		overflow: "hidden",
-		backgroundColor: colors.bg,
-		backgroundImage: `radial-gradient(circle, ${colors.textMuted} 0.5px, transparent 0.5px)`,
-		backgroundSize: "16px 16px",
+		backgroundColor: "transparent",
 	}
 
 	const canvasContainerStyle: React.CSSProperties = {
@@ -560,11 +642,15 @@ export function MemoryGraph({
 		justifyContent: "center",
 	}
 
-	const navControlsStyle: React.CSSProperties = {
+	const bottomLeftStackStyle: React.CSSProperties = {
 		position: "absolute",
-		bottom: 72,
+		bottom: 16,
 		left: 16,
-		zIndex: 15,
+		zIndex: 20,
+		display: "flex",
+		flexDirection: "column",
+		alignItems: "flex-start",
+		gap: 8,
 	}
 
 	return (
@@ -575,31 +661,6 @@ export function MemoryGraph({
 				totalLoaded={totalCount ?? documents.length}
 				colors={colors}
 			/>
-
-			{!isLoading && hasMore && onLoadMore && (
-				<button
-					type="button"
-					onClick={onLoadMore}
-					style={{
-						position: "absolute",
-						top: 16,
-						right: 16,
-						zIndex: 30,
-						borderRadius: 12,
-						border: `1px solid ${colors.controlBorder}`,
-						backgroundColor: colors.controlBg,
-						color: colors.textSecondary,
-						paddingLeft: 16,
-						paddingRight: 16,
-						paddingTop: 8,
-						paddingBottom: 8,
-						fontSize: 13,
-						cursor: "pointer",
-					}}
-				>
-					{isLoadingMore ? "Loading..." : "Load more"}
-				</button>
-			)}
 
 			{!isLoading && !nodes.some((n) => n.type === "document") && children && (
 				<div style={emptyStateStyle}>{children}</div>
@@ -639,33 +700,33 @@ export function MemoryGraph({
 						onNavigatePrev={navigatePrev}
 						onNavigateUp={navigateUp}
 						onSelectNode={handleNodeClick}
+						onOpenDocument={onOpenDocument ? handleOpenDocument : undefined}
 						screenX={activePopoverPosition.screenX}
 						screenY={activePopoverPosition.screenY}
 						versionChain={activeVersionChain}
 					/>
 				)}
 
-				<div>
-					{containerSize.width > 0 && (
-						<div style={navControlsStyle}>
-							<NavigationControls
-								nodes={nodes}
-								onAutoFit={handleAutoFit}
-								onCenter={handleCenter}
-								onZoomIn={handleZoomIn}
-								onZoomOut={handleZoomOut}
-								zoomLevel={zoomDisplay}
-								colors={colors}
-							/>
-						</div>
-					)}
-					<Legend
-						colors={colors}
-						edges={edges}
-						isLoading={isLoading}
-						nodes={nodes}
-					/>
-				</div>
+				{containerSize.width > 0 && (
+					<div style={bottomLeftStackStyle}>
+						<NavigationControls
+							nodes={nodes}
+							compact={isCompactViewport}
+							onAutoFit={handleAutoFit}
+							onCenter={handleCenter}
+							onZoomIn={handleZoomIn}
+							onZoomOut={handleZoomOut}
+							zoomLevel={zoomDisplay}
+							colors={colors}
+						/>
+						<Legend
+							colors={colors}
+							edges={edges}
+							isLoading={isLoading}
+							nodes={nodes}
+						/>
+					</div>
+				)}
 			</div>
 		</div>
 	)

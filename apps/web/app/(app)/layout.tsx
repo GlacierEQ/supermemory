@@ -1,13 +1,13 @@
 "use client"
 
 import { EnsureWorkspace } from "@/components/ensure-workspace"
-import { MobileBanner } from "@/components/mobile-banner"
+import { PWAInstallPrompt } from "@/components/pwa-install-prompt"
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
 	return (
 		<>
-			<MobileBanner />
 			<EnsureWorkspace>{children}</EnsureWorkspace>
+			<PWAInstallPrompt />
 		</>
 	)
 }

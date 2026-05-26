@@ -7,7 +7,16 @@ import { hasActivePlan } from "@lib/queries"
 import { GoogleDrive, Notion, OneDrive } from "@ui/assets/icons"
 import { useCustomer } from "autumn-js/react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Check, Plus, Trash2, Zap } from "lucide-react"
+import {
+	Check,
+	ChevronDown,
+	History,
+	Loader2,
+	RefreshCw,
+	Plus,
+	Trash2,
+	Zap,
+} from "lucide-react"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 import { useQueryState } from "nuqs"
@@ -20,8 +29,25 @@ import { RemoveConnectionDialog } from "@/components/remove-connection-dialog"
 import { addDocumentParam } from "@/lib/search-params"
 import { DEFAULT_PROJECT_ID } from "@lib/constants"
 import type { Project } from "@lib/types"
+import { SyncStatusBadge } from "@/components/settings/sync-status-badge"
+import { SyncHistoryPanel } from "@/components/settings/sync-history-panel"
+import { useConnectionHealth } from "@/hooks/use-connection-health"
+import { useTriggerSync } from "@/hooks/use-trigger-sync"
+import { formatRelativeTime } from "@/components/settings/sync-utils"
+import type { ImportProvider } from "@/components/settings/sync-utils"
 
 type Connection = z.infer<typeof ConnectionResponseSchema>
+
+/** Extract typed metadata from a connection, with runtime validation. */
+function getConnectionMeta(connection: Connection) {
+	const m = connection.metadata as Record<string, unknown> | undefined
+	return {
+		syncInProgress: m?.syncInProgress === true,
+		lastSyncedAt:
+			typeof m?.lastSyncedAt === "number" ? m.lastSyncedAt : undefined,
+		documentCount: typeof m?.documentCount === "number" ? m.documentCount : 0,
+	}
+}
 
 const CONNECTORS = {
 	"google-drive": {
@@ -128,64 +154,35 @@ function PillButton({
 	)
 }
 
-function ConnectionStatusBadge({ connected }: { connected: boolean }) {
-	return (
-		<div className="flex items-center gap-2">
-			<div
-				className={cn(
-					"size-[7px] rounded-full",
-					connected ? "bg-[#00AC3F]" : "bg-[#737373]",
-				)}
-			/>
-			<span
-				className={cn(
-					dmSans125ClassName(),
-					"font-medium text-[16px] tracking-[-0.16px]",
-					connected ? "text-[#00AC3F]" : "text-[#737373]",
-				)}
-			>
-				{connected ? "Connected" : "Disconnected"}
-			</span>
-		</div>
-	)
-}
-
 function ConnectionRow({
 	connection,
 	onDelete,
 	isDeleting,
 	disabled,
 	projects,
+	onTriggerSync,
+	isSyncing,
+	onReconnect,
+	isReconnecting,
 }: {
 	connection: Connection
 	onDelete: () => void
 	isDeleting: boolean
 	disabled?: boolean
 	projects: Project[]
+	onTriggerSync: () => void
+	isSyncing: boolean
+	onReconnect: () => void
+	isReconnecting: boolean
 }) {
+	const [historyOpen, setHistoryOpen] = useState(false)
 	const config = CONNECTORS[connection.provider as ConnectorProvider]
+	const { needsReauth } = useConnectionHealth(connection.id)
 	if (!config) return null
 
 	const Icon = config.icon
-	// Check if connection is active: if expiresAt exists and is in the future, or if no expiresAt
-	const isConnected =
-		!connection.expiresAt || new Date(connection.expiresAt) > new Date()
-
-	// Format relative time
-	const formatRelativeTime = (date: string | null | undefined) => {
-		if (!date) return "Never"
-		const d = new Date(date)
-		const now = new Date()
-		const diffMs = now.getTime() - d.getTime()
-		const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
-		const diffDays = Math.floor(diffHours / 24)
-
-		if (diffHours < 1) return "Just now"
-		if (diffHours < 24) return `${diffHours}h ago`
-		if (diffDays === 1) return "Yesterday"
-		if (diffDays < 7) return `${diffDays} days ago`
-		return d.toLocaleDateString()
-	}
+	const meta = getConnectionMeta(connection)
+	const expired = needsReauth
 
 	const getProjectDisplayName = (containerTag: string): string => {
 		if (containerTag === DEFAULT_PROJECT_ID) return "Default Project"
@@ -194,13 +191,11 @@ function ConnectionRow({
 		return containerTag.replace(/^sm_project_/, "") // if cached project is not found, remove the prefix
 	}
 
-	const documentCount = (connection.metadata?.documentCount as number) ?? 0
-	const containerTags = (
-		connection as Connection & { containerTags?: string[] }
-	).containerTags
 	const projectName =
-		containerTags && containerTags.length > 0 && containerTags[0]
-			? getProjectDisplayName(containerTags[0])
+		connection.containerTags &&
+		connection.containerTags.length > 0 &&
+		connection.containerTags[0]
+			? getProjectDisplayName(connection.containerTags[0])
 			: null
 
 	return (
@@ -224,7 +219,11 @@ function ConnectionRow({
 							>
 								{config.title}
 							</span>
-							<ConnectionStatusBadge connected={isConnected} />
+							<SyncStatusBadge
+								syncInProgress={meta.syncInProgress}
+								lastSyncedAt={meta.lastSyncedAt}
+								isExpired={expired}
+							/>
 						</div>
 						<span
 							className={cn(
@@ -235,15 +234,82 @@ function ConnectionRow({
 							{connection.email || "Unknown"}
 						</span>
 					</div>
-					<button
-						type="button"
-						onClick={onDelete}
-						disabled={isDeleting || disabled}
-						className="text-[#737373] hover:text-red-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-						aria-label="Delete connection"
-					>
-						<Trash2 className="size-[22px]" />
-					</button>
+					<div className="flex items-center gap-0.5">
+						{expired ? (
+							<button
+								type="button"
+								onClick={(e) => {
+									e.stopPropagation()
+									onReconnect()
+								}}
+								disabled={isReconnecting || disabled}
+								className={cn(
+									dmSans125ClassName(),
+									"flex items-center gap-1.5 rounded-full bg-[#EF4444]/15 px-3 py-1.5 text-[12px] font-medium text-[#EF4444] transition-colors hover:bg-[#EF4444]/25 disabled:opacity-60 disabled:cursor-not-allowed",
+								)}
+								aria-label="Reconnect"
+							>
+								{isReconnecting ? (
+									<Loader2 className="size-[14px] animate-spin" />
+								) : (
+									"Reconnect"
+								)}
+							</button>
+						) : (
+							<button
+								type="button"
+								onClick={(e) => {
+									e.stopPropagation()
+									onTriggerSync()
+								}}
+								disabled={isSyncing || disabled}
+								className="text-[#737373] hover:text-[#4BA0FA] transition-colors disabled:opacity-50 disabled:cursor-not-allowed p-1.5 rounded-lg hover:bg-white/5"
+								aria-label={isSyncing ? "Sync in progress" : "Sync now"}
+								title={isSyncing ? "Sync in progress" : "Sync now"}
+							>
+								{isSyncing ? (
+									<Loader2 className="size-[18px] animate-spin" />
+								) : (
+									<RefreshCw className="size-[18px]" />
+								)}
+							</button>
+						)}
+						<button
+							type="button"
+							onClick={(e) => {
+								e.stopPropagation()
+								setHistoryOpen((v) => !v)
+							}}
+							disabled={disabled}
+							aria-label="Sync history"
+							aria-expanded={historyOpen}
+							title={historyOpen ? "Hide sync history" : "Sync history"}
+							className={cn(
+								"transition-colors disabled:opacity-50 disabled:cursor-not-allowed p-1.5 rounded-lg hover:bg-white/5 flex items-center gap-0.5",
+								historyOpen
+									? "text-[#FAFAFA] bg-white/5"
+									: "text-[#737373] hover:text-[#FAFAFA]",
+							)}
+						>
+							<History className="size-[18px]" />
+							<ChevronDown
+								className={cn(
+									"size-3 transition-transform",
+									historyOpen && "rotate-180",
+								)}
+							/>
+						</button>
+						<button
+							type="button"
+							onClick={onDelete}
+							disabled={isDeleting || disabled}
+							className="text-[#737373] hover:text-red-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed p-1.5 rounded-lg hover:bg-white/5"
+							aria-label="Delete connection"
+							title="Remove connection"
+						>
+							<Trash2 className="size-[18px]" />
+						</button>
+					</div>
 				</div>
 
 				{/* Meta row */}
@@ -267,7 +333,7 @@ function ConnectionRow({
 							"font-medium text-[14px] tracking-[-0.14px] text-[#737373]",
 						)}
 					>
-						Added: {formatRelativeTime(connection.createdAt)}
+						Last synced: {formatRelativeTime(meta.lastSyncedAt)}
 					</span>
 					<div className="size-[3px] rounded-full bg-[#737373]" />
 					<span
@@ -276,9 +342,18 @@ function ConnectionRow({
 							"font-medium text-[14px] tracking-[-0.14px] text-[#737373]",
 						)}
 					>
-						{documentCount} {config.documentLabel} connected
+						{meta.documentCount} {config.documentLabel} connected
 					</span>
 				</div>
+
+				{historyOpen && (
+					<div className="border-t border-[rgba(82,89,102,0.15)] pt-4">
+						<SyncHistoryPanel
+							connectionId={connection.id}
+							isOpen={historyOpen}
+						/>
+					</div>
+				)}
 			</div>
 		</div>
 	)
@@ -342,16 +417,16 @@ export default function ConnectionsMCP() {
 		open: boolean
 		connection: Connection | null
 	}>({ open: false, connection: null })
+	const triggerSync = useTriggerSync()
 
 	const projects = (queryClient.getQueryData<Project[]>(["projects"]) ||
 		[]) as Project[]
 
-	const hasProProduct = hasActivePlan(autumn.customer?.products, "api_pro")
+	const hasProProduct = hasActivePlan(autumn.data?.subscriptions, "api_pro")
 
-	// Get connections data directly from autumn customer
-	const connectionsFeature = autumn.customer?.features?.connections
-	const connectionsUsed = connectionsFeature?.usage ?? 0
-	const connectionsLimit = connectionsFeature?.included_usage ?? 10
+	const connectionsBalance = autumn.data?.balances?.connections
+	const connectionsUsed = connectionsBalance?.usage ?? 0
+	const connectionsLimit = connectionsBalance?.granted ?? 10
 
 	const canAddConnection = connectionsUsed < connectionsLimit
 
@@ -376,7 +451,13 @@ export default function ConnectionsMCP() {
 			return response.data as Connection[]
 		},
 		staleTime: 30 * 1000,
-		refetchInterval: 60 * 1000,
+		refetchInterval: (query) => {
+			const conns = query.state.data as Connection[] | undefined
+			if (conns?.some((c) => getConnectionMeta(c).syncInProgress)) {
+				return 5000
+			}
+			return 60 * 1000
+		},
 		enabled: hasProProduct,
 	})
 
@@ -390,6 +471,42 @@ export default function ConnectionsMCP() {
 			})
 		}
 	}, [connectionsError])
+
+	const reconnectMutation = useMutation({
+		mutationFn: async ({
+			connectionId: _connectionId,
+			provider,
+			containerTags,
+		}: {
+			connectionId: string
+			provider: ConnectorProvider
+			containerTags: string[] | undefined
+		}) => {
+			const response = await $fetch("@post/connections/:provider", {
+				params: { provider },
+				body: {
+					redirectUrl: window.location.href,
+					containerTags: containerTags ?? [],
+				},
+			})
+			if ("data" in response && response.data && !("error" in response.data)) {
+				return response.data
+			}
+			throw new Error(response.error?.message || "Failed to reconnect")
+		},
+		onSuccess: (data) => {
+			if (data?.authLink) {
+				window.location.href = data.authLink
+				return
+			}
+			toast.error("Reconnect link missing — try again.")
+		},
+		onError: (error) => {
+			toast.error("Failed to reconnect", {
+				description: error instanceof Error ? error.message : "Unknown error",
+			})
+		},
+	})
 
 	const deleteConnectionMutation = useMutation({
 		mutationFn: async ({
@@ -424,20 +541,25 @@ export default function ConnectionsMCP() {
 	// Upgrade handler
 	const handleUpgrade = async () => {
 		try {
-			await autumn.attach({
-				productId: "api_pro",
-				successUrl: "https://app.supermemory.ai/settings#connections",
+			const result = await autumn.attach({
+				planId: "api_pro",
+				successUrl: `${window.location.origin}/settings#connections`,
 			})
-			window.location.reload()
+			if (result?.paymentUrl) {
+				window.open(result.paymentUrl, "_self")
+				return
+			}
+			autumn.refetch?.()
 		} catch (error) {
 			console.error(error)
+			toast.error("Failed to start checkout. Please try again.")
 		}
 	}
 
 	const isLoading = autumn.isLoading
 
 	return (
-		<div className="flex flex-col gap-8 pt-4 w-full">
+		<div className="flex flex-col gap-8 w-full">
 			{/* Supermemory Connections Section */}
 			<div className="flex flex-col gap-4">
 				<SectionTitle badge={<ProBadge />}>
@@ -459,11 +581,11 @@ export default function ConnectionsMCP() {
 							!hasProProduct && !isLoading && "opacity-30 pointer-events-none",
 						)}
 					>
-						<div className="flex items-center justify-between">
+						<div className="flex items-center justify-between gap-3">
 							<span
 								className={cn(
 									dmSans125ClassName(),
-									"font-semibold text-[16px] tracking-[-0.16px] text-[#FAFAFA]",
+									"min-w-0 flex-1 truncate font-semibold text-[15px] tracking-[-0.16px] text-[#FAFAFA] sm:text-[16px]",
 								)}
 							>
 								Connected to Supermemory
@@ -471,7 +593,7 @@ export default function ConnectionsMCP() {
 							<span
 								className={cn(
 									dmSans125ClassName(),
-									"font-semibold text-[16px] tracking-[-0.16px] text-[#737373]",
+									"shrink-0 whitespace-nowrap text-right font-semibold text-[13px] tracking-[-0.16px] text-[#737373] sm:text-[16px]",
 								)}
 							>
 								{connections.length}/{connectionsLimit} connections used
@@ -492,6 +614,31 @@ export default function ConnectionsMCP() {
 										isDeleting={deleteConnectionMutation.isPending}
 										disabled={!hasProProduct}
 										projects={projects}
+										onTriggerSync={() =>
+											triggerSync.mutate({
+												connectionId: connection.id,
+												provider: connection.provider as ImportProvider,
+												containerTags: connection.containerTags,
+											})
+										}
+										isSyncing={
+											(triggerSync.isPending &&
+												triggerSync.variables?.connectionId ===
+													connection.id) ||
+											getConnectionMeta(connection).syncInProgress
+										}
+										onReconnect={() => {
+											reconnectMutation.mutate({
+												connectionId: connection.id,
+												provider: connection.provider as ConnectorProvider,
+												containerTags: connection.containerTags,
+											})
+										}}
+										isReconnecting={
+											reconnectMutation.isPending &&
+											reconnectMutation.variables?.connectionId ===
+												connection.id
+										}
 									/>
 								))
 							) : (
@@ -578,7 +725,9 @@ export default function ConnectionsMCP() {
 				}}
 				provider={removeDialog.connection?.provider}
 				documentCount={
-					(removeDialog.connection?.metadata?.documentCount as number) ?? 0
+					removeDialog.connection
+						? getConnectionMeta(removeDialog.connection).documentCount
+						: 0
 				}
 				onConfirm={(deleteDocuments) => {
 					if (removeDialog.connection) {

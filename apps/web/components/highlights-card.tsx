@@ -1,17 +1,19 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useRef, useEffect } from "react"
 import { cn } from "@lib/utils"
 import { dmSansClassName } from "@/lib/fonts"
 import {
 	ChevronLeft,
 	ChevronRight,
 	Info,
-	Loader2,
 	MessageSquare,
 	Link2,
+	ArrowUp,
+	X,
 } from "lucide-react"
 import { Logo } from "@ui/assets/Logo"
+import { Popover, PopoverContent, PopoverTrigger } from "@ui/components/popover"
 import { analytics } from "@/lib/analytics"
 
 export type HighlightFormat = "paragraph" | "bullets" | "quote" | "one_liner"
@@ -27,7 +29,7 @@ export interface HighlightItem {
 
 interface HighlightsCardProps {
 	items: HighlightItem[]
-	onChat: (seed: string) => void
+	onChat: (highlightContent: string, userReply: string) => void
 	onShowRelated: (query: string) => void
 	isLoading?: boolean
 }
@@ -51,7 +53,7 @@ function renderContent(content: string, format: HighlightFormat) {
 		}
 		case "quote":
 			return (
-				<p className="text-[12px] leading-normal italic border-l-2 border-[#4BA0FA] pl-2">
+				<p className="text-[12px] leading-normal italic border-l-2 border-brand-accent pl-2">
 					"{content}"
 				</p>
 			)
@@ -69,26 +71,64 @@ export function HighlightsCard({
 	isLoading = false,
 }: HighlightsCardProps) {
 	const [activeIndex, setActiveIndex] = useState(0)
+	const [isReplyOpen, setIsReplyOpen] = useState(false)
+	const [replyText, setReplyText] = useState("")
+	const replyInputRef = useRef<HTMLInputElement>(null)
 
 	const currentItem = items[activeIndex]
 
+	useEffect(() => {
+		if (isReplyOpen) replyInputRef.current?.focus()
+	}, [isReplyOpen])
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-run when items changes
+	useEffect(() => {
+		setIsReplyOpen(false)
+		setReplyText("")
+	}, [items])
+
 	const handlePrev = useCallback(() => {
 		setActiveIndex((prev) => (prev > 0 ? prev - 1 : items.length - 1))
+		setIsReplyOpen(false)
+		setReplyText("")
 	}, [items.length])
 
 	const handleNext = useCallback(() => {
 		setActiveIndex((prev) => (prev < items.length - 1 ? prev + 1 : 0))
+		setIsReplyOpen(false)
+		setReplyText("")
 	}, [items.length])
 
-	const handleChat = useCallback(() => {
+	const handleChatClick = useCallback(() => {
 		if (!currentItem) return
 		analytics.highlightClicked({
 			highlight_id: currentItem.id,
 			action: "chat",
 		})
-		const seed = `Tell me more about "${currentItem.title}"`
-		onChat(seed)
-	}, [currentItem, onChat])
+		setIsReplyOpen(true)
+	}, [currentItem])
+
+	const handleReplySubmit = useCallback(() => {
+		if (!currentItem || !replyText.trim()) return
+		const highlightContent = `${currentItem.title}\n\n${currentItem.content}`
+		onChat(highlightContent, replyText.trim())
+		setIsReplyOpen(false)
+		setReplyText("")
+	}, [currentItem, replyText, onChat])
+
+	const handleReplyKeyDown = useCallback(
+		(e: React.KeyboardEvent) => {
+			if (e.key === "Enter" && !e.shiftKey) {
+				e.preventDefault()
+				handleReplySubmit()
+			}
+			if (e.key === "Escape") {
+				setIsReplyOpen(false)
+				setReplyText("")
+			}
+		},
+		[handleReplySubmit],
+	)
 
 	const handleShowRelated = useCallback(() => {
 		if (!currentItem) return
@@ -103,14 +143,24 @@ export function HighlightsCard({
 		return (
 			<div
 				className={cn(
-					"bg-[#0B1017] border border-[rgba(255,255,255,0.05)] rounded-[18px] p-3 flex flex-col gap-3 min-h-[180px] items-center justify-center",
+					"bg-surface-card/60 backdrop-blur-md rounded-[18px] p-3 flex flex-col gap-3 shadow-[0_12px_40px_rgba(0,0,0,0.22)]",
 					dmSansClassName(),
 				)}
 			>
-				<Loader2 className="size-5 animate-spin text-[#4BA0FA]" />
-				<span className="text-[10px] text-[#737373]">
-					Loading highlights...
-				</span>
+				<div className="flex items-center gap-1">
+					<div className="size-[14px] rounded-full bg-surface-skeleton animate-pulse" />
+					<div className="h-2 w-20 rounded bg-surface-skeleton animate-pulse" />
+				</div>
+				<div className="flex flex-col gap-1.5">
+					<div className="h-2.5 w-2/5 rounded bg-surface-skeleton animate-pulse" />
+					<div className="h-2 w-full rounded bg-surface-skeleton animate-pulse" />
+					<div className="h-2 w-[85%] rounded bg-surface-skeleton animate-pulse" />
+					<div className="h-2 w-[65%] rounded bg-surface-skeleton animate-pulse" />
+				</div>
+				<div className="flex items-center gap-2">
+					<div className="h-[26px] w-14 rounded-lg bg-surface-skeleton animate-pulse" />
+					<div className="h-[26px] w-16 rounded-lg bg-surface-skeleton animate-pulse" />
+				</div>
 			</div>
 		)
 	}
@@ -119,7 +169,7 @@ export function HighlightsCard({
 		return (
 			<div
 				className={cn(
-					"bg-[#0B1017] border border-[rgba(255,255,255,0.05)] rounded-[18px] p-3 flex flex-col gap-3 min-h-[180px]",
+					"bg-surface-card/60 backdrop-blur-md rounded-[18px] p-3 flex flex-col gap-3 min-h-[180px] shadow-[0_12px_40px_rgba(0,0,0,0.22)]",
 					dmSansClassName(),
 				)}
 			>
@@ -127,17 +177,17 @@ export function HighlightsCard({
 					<div className="flex items-center gap-1">
 						<Logo className="size-[14px]" />
 						<div className="flex items-center gap-0.5">
-							<span className="text-[10px] text-[#4BA0FA] tracking-[-0.3px]">
+							<span className="text-[10px] text-brand-accent tracking-[-0.3px]">
 								powered by
 							</span>
-							<span className="text-[10px] text-[#4BA0FA] font-medium tracking-[-0.3px]">
+							<span className="text-[10px] text-brand-accent font-medium tracking-[-0.3px]">
 								supermemory
 							</span>
 						</div>
 					</div>
 				</div>
 				<div className="flex-1 flex items-center justify-center">
-					<p className="text-[11px] text-[#737373] text-center">
+					<p className="text-[11px] text-fg-muted text-center">
 						Add some documents to see highlights here
 					</p>
 				</div>
@@ -148,7 +198,7 @@ export function HighlightsCard({
 	return (
 		<div
 			className={cn(
-				"bg-[#0B1017] border border-[rgba(255,255,255,0.05)] rounded-[18px] p-3 flex flex-col gap-3",
+				"bg-surface-card/60 backdrop-blur-md rounded-[18px] p-3 flex flex-col gap-3 shadow-[0_12px_40px_rgba(0,0,0,0.22)]",
 				dmSansClassName(),
 			)}
 		>
@@ -156,53 +206,111 @@ export function HighlightsCard({
 				<div className="flex items-center gap-1">
 					<Logo className="size-[14px]" />
 					<div className="flex items-center gap-0.5">
-						<span className="text-[10px] text-[#4BA0FA] tracking-[-0.3px]">
+						<span className="text-[10px] text-brand-accent tracking-[-0.3px]">
 							powered by
 						</span>
-						<span className="text-[10px] text-[#4BA0FA] font-medium tracking-[-0.3px]">
+						<span className="text-[10px] text-brand-accent font-medium tracking-[-0.3px]">
 							supermemory
 						</span>
 					</div>
 				</div>
-				<Info className="size-[14px] text-[#737373]" />
+				<Popover>
+					<PopoverTrigger asChild>
+						<button
+							type="button"
+							aria-label="About the Daily Brief"
+							className="shrink-0 rounded-full p-0.5 text-fg-subtle transition-colors hover:text-fg-primary focus-visible:outline-none"
+						>
+							<Info className="size-[14px]" />
+						</button>
+					</PopoverTrigger>
+					<PopoverContent
+						align="end"
+						side="bottom"
+						className={cn(
+							"w-64 rounded-xl border border-[#263348]/60 p-3 shadow-[0px_1.5px_20px_0px_rgba(0,0,0,0.65)]",
+							dmSansClassName(),
+						)}
+						style={{
+							background: "linear-gradient(180deg, #101822 0%, #0A0E14 100%)",
+						}}
+					>
+						<p className="mb-1 text-[12px] font-semibold text-fg-primary">
+							Daily Brief
+						</p>
+						<p className="text-[12px] leading-relaxed text-fg-subtle">
+							AI-generated highlights and questions drawn from your memories. It
+							refreshes automatically every few hours — tap the refresh icon to
+							update it now.
+						</p>
+					</PopoverContent>
+				</Popover>
 			</div>
 
 			<div id="highlights-body" className="flex flex-col gap-1.5">
-				<p className="text-[12px] font-semibold text-[#FAFAFA] leading-tight truncate">
+				<p className="text-[12px] font-semibold text-fg-primary leading-tight truncate">
 					{currentItem.title}
 				</p>
-				<div className="text-[12px] text-[#FAFAFA] leading-normal line-clamp-5">
+				<div className="text-[12px] text-fg-primary leading-normal line-clamp-5">
 					{renderContent(currentItem.content, currentItem.format)}
 				</div>
 			</div>
+
+			{isReplyOpen && (
+				<div className="flex items-center gap-1.5">
+					<div className="flex-1 flex items-center bg-pill-bg border border-pill-border rounded-full px-3 py-1 gap-1.5 focus-within:border-pill-border-active transition-colors">
+						<input
+							ref={replyInputRef}
+							type="text"
+							value={replyText}
+							onChange={(e) => setReplyText(e.target.value)}
+							onKeyDown={handleReplyKeyDown}
+							placeholder={`Ask Nova about "${currentItem.title.length > 36 ? `${currentItem.title.slice(0, 36)}…` : currentItem.title}"`}
+							className="flex-1 bg-transparent text-[11px] text-fg-primary placeholder:text-fg-subtle outline-none min-w-0"
+						/>
+						<button
+							type="button"
+							onClick={handleReplySubmit}
+							disabled={!replyText.trim()}
+							className="shrink-0 flex items-center justify-center text-fg-subtle hover:text-fg-primary disabled:opacity-30 disabled:hover:text-fg-subtle cursor-pointer disabled:cursor-default transition-colors"
+							aria-label="Send reply"
+						>
+							<ArrowUp className="size-3.5" />
+						</button>
+					</div>
+					<button
+						type="button"
+						onClick={() => {
+							setIsReplyOpen(false)
+							setReplyText("")
+						}}
+						className="shrink-0 text-fg-subtle hover:text-fg-primary transition-colors cursor-pointer"
+						aria-label="Cancel reply"
+					>
+						<X className="size-3.5" />
+					</button>
+				</div>
+			)}
 
 			<div className="flex items-center justify-between w-full gap-2">
 				<div id="highlights-actions" className="flex gap-2 items-center">
 					<button
 						type="button"
-						onClick={handleChat}
-						className="bg-[#1B1F24] rounded-[8px] px-2 py-1.5 flex items-center gap-1.5 cursor-pointer relative"
-						style={{
-							boxShadow: "0 4px 20px 0 rgba(0, 0, 0, 0.25)",
-						}}
+						onClick={handleChatClick}
+						className="rounded-full border border-pill-border bg-pill-bg px-2.5 py-1 text-[11px] text-fg-secondary hover:bg-pill-bg-active hover:border-pill-border-active hover:text-fg-primary transition-colors flex items-center gap-1.5 cursor-pointer"
 						aria-label="Chat with Nova"
 					>
-						<MessageSquare className="size-3.5 text-[#FAFAFA]" />
-						<span className="text-[11px] text-[#FAFAFA]">Chat</span>
-						<div className="absolute inset-0 pointer-events-none rounded-[inherit] shadow-[inset_1px_1px_1px_0_rgba(255,255,255,0.1)]" />
+						<MessageSquare className="size-3.5" />
+						Chat
 					</button>
 					<button
 						type="button"
 						onClick={handleShowRelated}
-						className="bg-[#1B1F24] rounded-[8px] px-2 py-1.5 flex items-center gap-1.5 cursor-pointer relative"
-						style={{
-							boxShadow: "0 4px 20px 0 rgba(0, 0, 0, 0.25)",
-						}}
+						className="rounded-full border border-pill-border bg-pill-bg px-2.5 py-1 text-[11px] text-fg-secondary hover:bg-pill-bg-active hover:border-pill-border-active hover:text-fg-primary transition-colors flex items-center gap-1.5 cursor-pointer"
 						aria-label="Show related"
 					>
-						<Link2 className="size-3.5 text-[#FAFAFA]" />
-						<span className="text-[11px] text-[#FAFAFA]">Related</span>
-						<div className="absolute inset-0 pointer-events-none rounded-[inherit] shadow-[inset_1px_1px_1px_0_rgba(255,255,255,0.1)]" />
+						<Link2 className="size-3.5" />
+						Related
 					</button>
 				</div>
 
@@ -211,7 +319,7 @@ export function HighlightsCard({
 						<button
 							type="button"
 							onClick={handlePrev}
-							className="text-[#737373] hover:text-white transition-colors cursor-pointer"
+							className="text-fg-subtle hover:text-fg-primary transition-colors cursor-pointer"
 							aria-label="Previous item"
 						>
 							<ChevronLeft className="size-4" />
@@ -221,12 +329,16 @@ export function HighlightsCard({
 								<button
 									key={idx}
 									type="button"
-									onClick={() => setActiveIndex(idx)}
+									onClick={() => {
+										setActiveIndex(idx)
+										setIsReplyOpen(false)
+										setReplyText("")
+									}}
 									className={cn(
 										"rounded-full transition-all cursor-pointer",
 										idx === activeIndex
-											? "w-4 h-1.5 bg-[#4BA0FA]"
-											: "size-1.5 bg-[#737373] hover:bg-[#999999]",
+											? "w-4 h-1.5 bg-brand-accent"
+											: "size-1.5 bg-fg-subtle hover:bg-fg-secondary",
 									)}
 									aria-label={`Go to item ${idx + 1}`}
 								/>
@@ -235,7 +347,7 @@ export function HighlightsCard({
 						<button
 							type="button"
 							onClick={handleNext}
-							className="text-[#737373] hover:text-white transition-colors cursor-pointer"
+							className="text-fg-subtle hover:text-fg-primary transition-colors cursor-pointer"
 							aria-label="Next item"
 						>
 							<ChevronRight className="size-4" />

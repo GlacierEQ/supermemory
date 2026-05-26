@@ -7,6 +7,7 @@ import {
 	BulkDeleteMemoriesResponseSchema,
 	BulkDeleteMemoriesSchema,
 	ConnectionResponseSchema,
+	ContainerTagSettingsUpdateSchema,
 	CreateProjectSchema,
 	DeleteProjectResponseSchema,
 	DeleteProjectSchema,
@@ -19,11 +20,13 @@ import {
 	MemoryResponseSchema,
 	MigrateMCPRequestSchema,
 	MigrateMCPResponseSchema,
+	ProcessingDocumentsResponseSchema,
 	ProjectSchema,
 	SearchRequestSchema,
 	SearchResponseSchema,
 	type SearchResult,
 	SettingsRequestSchema,
+	UpdateContainerTagSettingsRequestSchema,
 } from "../validation/api"
 
 // Settings response schema - this is custom to console (not in shared validation)
@@ -124,6 +127,41 @@ export const apiSchema = createSchema({
 		}),
 	},
 
+	"@get/connections/:connectionId/sync-runs": {
+		output: z.array(
+			z.object({
+				id: z.string(),
+				connectionId: z.string(),
+				status: z.enum(["running", "completed", "failed"]),
+				triggerType: z.enum(["event", "cron", "manual"]),
+				startedAt: z.string(),
+				completedAt: z.string().nullable(),
+				itemsProcessed: z.number(),
+				itemsFailed: z.number(),
+				error: z.string().nullable(),
+			}),
+		),
+		params: z.object({ connectionId: z.string() }),
+	},
+
+	"@post/connections/:provider/import": {
+		input: z.object({
+			containerTags: z.array(z.string()).optional(),
+		}),
+		output: z.unknown(),
+		params: z.object({
+			provider: z.enum([
+				"google-drive",
+				"notion",
+				"onedrive",
+				"gmail",
+				"github",
+				"web-crawler",
+				"s3",
+			]),
+		}),
+	},
+
 	// Settings operations
 	"@get/settings": {
 		output: z.object({ settings: z.object({}).passthrough() }),
@@ -131,6 +169,19 @@ export const apiSchema = createSchema({
 	"@patch/settings": {
 		input: SettingsRequestSchema,
 		output: SettingsResponseSchema,
+	},
+	"@post/settings/reset": {
+		input: z.object({ confirmation: z.string() }),
+		output: z.object({
+			success: z.boolean(),
+			deletedConnections: z.number(),
+			deletedDocumentBatches: z.number(),
+			deletedDocumentsApprox: z.number(),
+			deletedMemoryRows: z.number(),
+			deletedExtraSpaces: z.number(),
+			clearedDefaultSpaceContext: z.boolean(),
+			settingsReset: z.boolean(),
+		}),
 	},
 	// Memory operations
 	"@post/documents": {
@@ -165,6 +216,15 @@ export const apiSchema = createSchema({
 		output: MigrateMCPResponseSchema,
 	},
 
+	"@get/documents/processing": {
+		output: ProcessingDocumentsResponseSchema,
+		query: z
+			.object({
+				containerTags: z.array(z.string()).optional(),
+			})
+			.optional(),
+	},
+
 	"@get/documents/:id": {
 		output: z.any(),
 	},
@@ -193,6 +253,24 @@ export const apiSchema = createSchema({
 	},
 	"@get/container-tags/list": {
 		output: ListContainerTagsResponseSchema,
+	},
+	"@patch/container-tags/:containerTag": {
+		input: UpdateContainerTagSettingsRequestSchema,
+		output: ContainerTagSettingsUpdateSchema,
+		params: z.object({
+			containerTag: z.string(),
+		}),
+	},
+	"@delete/container-tags/:containerTag": {
+		output: z.object({
+			success: z.boolean(),
+			containerTag: z.string(),
+			deletedDocumentsCount: z.number(),
+			deletedMemoriesCount: z.number(),
+		}),
+		params: z.object({
+			containerTag: z.string(),
+		}),
 	},
 	"@post/projects": {
 		input: CreateProjectSchema,
@@ -230,6 +308,12 @@ export const apiSchema = createSchema({
 export const $fetch = createFetch({
 	baseURL: `${process.env.NEXT_PUBLIC_BACKEND_URL ?? "https://api.supermemory.ai"}/v3`,
 	credentials: "include",
+	headers: { "X-App-Source": "nova" },
+	onRequest: (context: { headers: Headers }) => {
+		if (!context.headers.has("X-App-Source")) {
+			context.headers.set("X-App-Source", "nova")
+		}
+	},
 	retry: {
 		attempts: 3,
 		delay: 100,

@@ -187,7 +187,12 @@ export function FileContent({
 	const hasItems = data.items.length > 0
 
 	return (
-		<div className={cn("h-full flex flex-col gap-6 pt-4", dmSansClassName())}>
+		<div
+			className={cn(
+				"h-full flex flex-col gap-6 pt-0 md:pt-4",
+				dmSansClassName(),
+			)}
+		>
 			<div className="flex flex-col gap-2">
 				<p className="text-[16px] font-medium pl-2">
 					Upload files (images, PDF, documents, sheets, markdown)
@@ -210,10 +215,10 @@ export function FileContent({
 						multiple
 						onChange={handleFileSelect}
 						disabled={isSubmitting}
-						className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+						className="absolute inset-0 size-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
 						accept={FILE_ACCEPT}
 					/>
-					<div className="flex items-center justify-center w-12 h-12 rounded-full bg-[#0F1217]">
+					<div className="flex items-center justify-center size-12 rounded-full bg-[#0F1217]">
 						<FileIcon className="size-6 text-[#737373]" />
 					</div>
 					{hasItems ? (
@@ -237,12 +242,12 @@ export function FileContent({
 			{hasItems ? (
 				<ul
 					id="file-upload-queue"
-					className="flex flex-col gap-2 max-h-[220px] overflow-y-auto scrollbar-thin pr-1"
+					className="flex flex-col gap-2 max-h-[360px] overflow-y-auto scrollbar-thin pr-1"
 				>
 					{data.items.map((item) => (
 						<li
 							key={item.id}
-							className="relative overflow-hidden rounded-[12px] bg-[#14161A] shadow-inside-out text-sm"
+							className="relative shrink-0 overflow-hidden rounded-[12px] bg-[#14161A] shadow-inside-out text-sm"
 						>
 							{item.status === "uploading" ? (
 								<div

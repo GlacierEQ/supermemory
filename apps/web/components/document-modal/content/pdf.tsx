@@ -1,7 +1,7 @@
 "use client"
 
 import { Document, Page, pdfjs } from "react-pdf"
-import { useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import "react-pdf/dist/Page/AnnotationLayer.css"
 import "react-pdf/dist/Page/TextLayer.css"
 
@@ -13,12 +13,29 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 
 interface PdfViewerProps {
 	url: string | null | undefined
+	documentId?: string | null
 }
 
-export function PdfViewer({ url }: PdfViewerProps) {
+export function PdfViewer({ url, documentId }: PdfViewerProps) {
+	const fileSource = useMemo(() => {
+		if (!url) return null
+		try {
+			if (new URL(url).hostname === "www.googleapis.com" && documentId) {
+				const base =
+					process.env.NEXT_PUBLIC_BACKEND_URL ?? "https://api.supermemory.ai"
+				return {
+					url: `${base}/v3/drive-proxy/${documentId}`,
+					withCredentials: true,
+				}
+			}
+		} catch {}
+		return url
+	}, [url, documentId])
+
 	const [numPages, setNumPages] = useState<number | null>(null)
 	const [loading, setLoading] = useState(true)
 	const [error, setError] = useState<string | null>(null)
+	const [retryKey, setRetryKey] = useState(0)
 
 	if (!url) {
 		return (
@@ -34,16 +51,30 @@ export function PdfViewer({ url }: PdfViewerProps) {
 		setError(null)
 	}
 
-	function onDocumentLoadError(error: Error) {
-		setError(error.message || "Failed to load PDF")
-		setLoading(false)
-	}
+	// On first failure, wait briefly then force a re-mount of the Document
+	// component to retry (covers transient R2 timing issues).
+	// On second failure, give up and show the error state.
+	const onDocumentLoadError = useCallback(
+		(err: Error) => {
+			if (retryKey === 0) {
+				setTimeout(() => {
+					setRetryKey(1)
+					setLoading(true)
+					setError(null)
+				}, 500)
+				return
+			}
+			setError(err.message || "Failed to load PDF")
+			setLoading(false)
+		},
+		[retryKey],
+	)
 
 	return (
-		<div className="flex flex-col h-full w-full overflow-hidden scrollbar-thin">
+		<div className="flex flex-col size-full overflow-hidden scrollbar-thin">
 			{loading && (
 				<div className="flex items-center justify-center h-full text-gray-400">
-					Loading PDF...
+					Loading PDF…
 				</div>
 			)}
 			{error && (
@@ -53,8 +84,9 @@ export function PdfViewer({ url }: PdfViewerProps) {
 			)}
 			<div className="flex-1 overflow-auto w-full">
 				<Document
+					key={retryKey}
 					file={
-						url ||
+						fileSource ||
 						"https://corsproxy.io/?" +
 							encodeURIComponent("http://www.pdf995.com/samples/pdf.pdf")
 					}

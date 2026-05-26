@@ -1,3 +1,47 @@
+const PROXY_LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1"])
+
+/** Reconstruct the browser-facing URL when running behind portless (or similar). */
+export function getPublicRequestUrl(request: Request): URL {
+	const internal = new URL(request.url)
+	const forwardedHost = request.headers
+		.get("x-forwarded-host")
+		?.split(",")[0]
+		?.trim()
+	if (forwardedHost) {
+		const proto = request.headers.get("x-forwarded-proto") || "https"
+		return new URL(
+			`${proto}://${forwardedHost}${internal.pathname}${internal.search}`,
+		)
+	}
+	const portlessUrl = process.env.PORTLESS_URL
+	if (portlessUrl) {
+		try {
+			const base = new URL(portlessUrl)
+			return new URL(`${base.origin}${internal.pathname}${internal.search}`)
+		} catch {}
+	}
+	return internal
+}
+
+/** Map portless proxy localhost redirects back to the current public origin. */
+export function resolveAuthRedirectUrl(
+	redirectUrl: string | null,
+	origin: string,
+): URL {
+	const fallback = new URL(origin)
+	if (!redirectUrl) return fallback
+	try {
+		const target = new URL(redirectUrl)
+		if (PROXY_LOCAL_HOSTS.has(target.hostname)) {
+			return new URL(`${target.pathname}${target.search}`, origin)
+		}
+		if (target.origin === origin) return target
+		return fallback
+	} catch {
+		return fallback
+	}
+}
+
 /**
  * Validates if a string is a valid URL.
  */
@@ -187,6 +231,29 @@ export function toXProfileUrl(handle: string): string {
 export function toLinkedInProfileUrl(handle: string): string {
 	if (!handle.trim()) return ""
 	return `https://linkedin.com/in/${handle.trim()}`
+}
+
+/**
+ * Checks if a URL points to a supermemory-hosted file.
+ * Matches the public bucket domain (files.supermemory.ai) and
+ * presigned R2 URLs whose hostname ends with `.r2.cloudflarestorage.com`.
+ *
+ * Note: The R2 check is intentionally broad — it matches any Cloudflare R2
+ * presigned URL, not only supermemory's account.  This is acceptable because
+ * the function is only called on `document.url` values returned by our own
+ * backend, where all R2 URLs originate from the supermemory bucket.
+ * If user-supplied external R2 URLs ever appear in this field, tighten the
+ * check by also validating the account-id subdomain or the bucket path prefix.
+ */
+export const isSupermemoryFileUrl = (url: string): boolean => {
+	try {
+		const parsed = new URL(url)
+		if (parsed.hostname === "files.supermemory.ai") return true
+		if (parsed.hostname.endsWith(".r2.cloudflarestorage.com")) return true
+		return false
+	} catch {
+		return false
+	}
 }
 
 /**

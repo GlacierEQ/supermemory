@@ -4,25 +4,119 @@
 
 @theme {
 	--color-onboarding: #525966;
+
+	--color-fg-primary: #fafafa;
+	--color-fg-secondary: #e2e8f0;
+	--color-fg-muted: #d0dae7;
+	--color-fg-subtle: #b5c2d3;
+	--color-fg-faint: #a0aec4;
+
+	--color-surface-base: #0b1119;
+	--color-surface-card: #101822;
+	--color-surface-hover: #131b28;
+	--color-surface-skeleton: #1a2030;
+	--color-surface-border: #263348;
+
+	--color-pill-bg: #0d121a;
+	--color-pill-bg-active: #00173c;
+	--color-pill-border: #161f2c;
+	--color-pill-border-active: #2261ca33;
+
+	--color-brand-accent: #4ba0fa;
+
 	--animate-file-upload-grow: file-upload-grow 6s cubic-bezier(0.22, 1, 0.36, 1)
 		forwards;
 }
 
 :root {
 	--color-placeholder-onboarding: #525966;
+	--sm-scrollbar-thumb: rgb(41 57 82 / 0.55);
+	--sm-scrollbar-thumb-hover: rgb(55 90 130 / 0.75);
+	--sm-scrollbar-thumb-active: rgb(70 110 160 / 0.85);
+}
+
+* {
+	scrollbar-width: thin;
+	scrollbar-color: var(--sm-scrollbar-thumb) transparent;
+}
+
+*::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+	background-color: var(--sm-scrollbar-thumb);
+	border-radius: 100px;
+	border: 2px solid transparent;
+	background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+	background-color: var(--sm-scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-thumb:active {
+	background-color: var(--sm-scrollbar-thumb-active);
+}
+
+*::-webkit-scrollbar-corner {
+	background: transparent;
 }
 
 .scrollbar-thin {
 	scrollbar-width: thin;
-	scrollbar-color: #293952 transparent;
+	scrollbar-color: var(--sm-scrollbar-thumb) transparent;
 }
 
-.scrollbar-thin::-webkit-scrollbar {
-	width: 6px;
+.scrollbar-none {
+	scrollbar-width: none;
 }
 
-.scrollbar-thin::-webkit-scrollbar-track {
-	background: transparent;
+.scrollbar-none::-webkit-scrollbar {
+	display: none;
+}
+
+.pb-safe {
+	padding-bottom: max(0px, env(safe-area-inset-bottom));
+}
+
+.pt-safe {
+	padding-top: max(0px, env(safe-area-inset-top));
+}
+
+.pl-safe {
+	padding-left: max(0px, env(safe-area-inset-left));
+}
+
+.pr-safe {
+	padding-right: max(0px, env(safe-area-inset-right));
+}
+
+.bottom-safe-5 {
+	bottom: max(1.25rem, env(safe-area-inset-bottom));
+}
+
+/* hide scrollbar but keep edge-fade affordance for horizontal nav */
+.scroll-fade-x {
+	-webkit-mask-image: linear-gradient(
+		to right,
+		transparent 0,
+		#000 12px,
+		#000 calc(100% - 12px),
+		transparent 100%
+	);
+	mask-image: linear-gradient(
+		to right,
+		transparent 0,
+		#000 12px,
+		#000 calc(100% - 12px),
+		transparent 100%
+	);
 }
 
 .sm-tweet-theme .react-tweet-theme {

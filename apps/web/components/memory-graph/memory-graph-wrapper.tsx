@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { MemoryGraph as MemoryGraphBase } from "@supermemory/memory-graph"
+import type { GraphThemeColors } from "@supermemory/memory-graph"
 import { useGraphApi } from "./hooks/use-graph-api"
 
 export interface MemoryGraphWrapperProps {
@@ -19,6 +20,7 @@ export interface MemoryGraphWrapperProps {
 	onSlideshowNodeChange?: (nodeId: string | null) => void
 	onSlideshowStop?: () => void
 	canvasRef?: React.RefObject<HTMLCanvasElement | null>
+	onOpenDocument?: (documentId: string) => void
 }
 
 export function MemoryGraph({
@@ -27,7 +29,8 @@ export function MemoryGraph({
 	error: externalError = null,
 	variant = "console",
 	containerTags,
-	maxNodes = 200,
+	documentIds,
+	maxNodes,
 	canvasRef,
 	...rest
 }: MemoryGraphWrapperProps) {
@@ -55,11 +58,12 @@ export function MemoryGraph({
 		totalCount,
 	} = useGraphApi({
 		containerTags,
+		documentIds,
 		enabled: containerSize.width > 0 && containerSize.height > 0,
 	})
 
 	return (
-		<div ref={containerRef} className="w-full h-full">
+		<div ref={containerRef} className="size-full [&>div]:!bg-none">
 			<MemoryGraphBase
 				documents={documents}
 				isLoading={externalIsLoading || apiIsLoading}
@@ -71,6 +75,12 @@ export function MemoryGraph({
 				maxNodes={maxNodes}
 				canvasRef={canvasRef}
 				totalCount={totalCount}
+				colors={
+					{
+						bg: "transparent",
+						edgeDerives: "#9ca3af",
+					} satisfies Partial<GraphThemeColors>
+				}
 				{...rest}
 			>
 				{children}

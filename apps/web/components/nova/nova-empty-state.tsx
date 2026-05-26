@@ -1,6 +1,7 @@
 "use client"
 
 import { CHROME_EXTENSION_URL } from "@repo/lib/constants"
+import type { IntegrationParamValue } from "@/lib/search-params"
 import { cn } from "@lib/utils"
 import { dmSansClassName } from "@/lib/fonts"
 import { Button } from "@ui/components/button"
@@ -10,9 +11,7 @@ import { ArrowRight, Link2, FileText, Zap } from "lucide-react"
 
 interface NovaEmptyStateProps {
 	onAddMemory: (tab: "note" | "link") => void
-	onOpenIntegrations: (
-		integration?: "import" | "chrome" | "connections",
-	) => void
+	onOpenIntegrations: (integration?: IntegrationParamValue) => void
 	isAllSpaces: boolean
 	spaceName?: string
 	onSwitchToAllSpaces?: () => void
@@ -40,7 +39,7 @@ export function NovaEmptyState({
 	return (
 		<div
 			id="nova-empty-state"
-			className="min-h-[calc(100dvh-12rem)] flex items-center justify-center p-6 md:p-8 opacity-50 hover:opacity-100 transition-opacity duration-300"
+			className="min-h-[calc(100svh-12rem)] sm:min-h-[calc(100dvh-12rem)] flex items-center justify-center p-4 sm:p-6 md:p-8 opacity-50 hover:opacity-100 transition-opacity duration-300"
 		>
 			<div className="max-w-xl w-full flex flex-col items-center text-center">
 				<NovaOrb size={80} className="blur-[2px]! mb-4" />
@@ -120,7 +119,7 @@ export function NovaEmptyState({
 					</>
 				)}
 
-				<div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full mb-4">
+				<div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3 w-full mb-4">
 					<button
 						type="button"
 						onClick={() => onAddMemory("link")}

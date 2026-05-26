@@ -24,43 +24,69 @@
   </div>
 
   <div id="controls">
-    <button id="fit-btn" title="Fit to view">&#x229E;</button>
-    <button id="zoom-in" title="Zoom in">+</button>
-    <button id="zoom-out" title="Zoom out">&minus;</button>
+    <button type="button" id="fit-btn" title="Fit to view">
+      <span>Fit</span>
+      <kbd>Z</kbd>
+    </button>
+    <button type="button" id="center-btn" title="Center graph">
+      <span>Center</span>
+      <kbd>C</kbd>
+    </button>
+    <div id="zoom-row">
+      <span id="zoom-display">100%</span>
+      <button type="button" id="zoom-out" title="Zoom out">&minus;</button>
+      <button type="button" id="zoom-in" title="Zoom in">+</button>
+    </div>
   </div>
 
-  <div id="legend">
-    <div class="legend-row">
-      <svg width="12" height="12" viewBox="0 0 12 12"><polygon points="6,1.5 10.4,3.75 10.4,8.25 6,10.5 1.6,8.25 1.6,3.75" fill="#0D2034" stroke="#3B73B8" stroke-width="1.2"/></svg>
-      <span>Memory</span>
+  <div id="legend" class="collapsed">
+    <div id="legend-toggle">
+      <span>Legend</span>
+      <svg class="legend-chevron" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M3 2l4 3-4 3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
     </div>
-    <div class="legend-row">
-      <svg width="12" height="12" viewBox="0 0 12 12"><polygon points="6,1.5 10.4,3.75 10.4,8.25 6,10.5 1.6,8.25 1.6,3.75" fill="#0D2034" stroke="#10B981" stroke-width="1.2"/></svg>
-      <span>Recent (&lt;1d)</span>
-    </div>
-    <div class="legend-row">
-      <svg width="12" height="12" viewBox="0 0 12 12"><polygon points="6,1.5 10.4,3.75 10.4,8.25 6,10.5 1.6,8.25 1.6,3.75" fill="#0D2034" stroke="#F59E0B" stroke-width="1.2"/></svg>
-      <span>Expiring</span>
-    </div>
-    <div class="legend-row">
-      <svg width="12" height="12" viewBox="0 0 12 12"><polygon points="6,1.5 10.4,3.75 10.4,8.25 6,10.5 1.6,8.25 1.6,3.75" fill="#0D2034" stroke="#EF4444" stroke-width="1.2"/></svg>
-      <span>Forgotten</span>
-    </div>
-    <div class="legend-row">
-      <div class="legend-doc"></div>
-      <span>Document</span>
-    </div>
-    <div class="legend-row">
-      <div class="legend-line" style="border-color: #4A5568;"></div>
-      <span>Doc &rarr; Memory</span>
-    </div>
-    <div class="legend-row">
-      <div class="legend-line" style="border-color: #8B5CF6; border-width: 2px;"></div>
-      <span>Version</span>
-    </div>
-    <div class="legend-row">
-      <div class="legend-line dashed" style="border-color: #00D4B8;"></div>
-      <span>Similarity</span>
+    <div id="legend-body">
+      <div class="legend-group">
+        <div class="legend-row">
+          <svg width="12" height="12" viewBox="0 0 14 14" aria-hidden="true"><rect x="1" y="1" width="12" height="12" rx="3" fill="var(--doc-fill)" stroke="var(--doc-stroke)" stroke-width="1.2"/></svg>
+          <span>Documents</span>
+          <span class="legend-count" id="legend-doc-count"></span>
+        </div>
+        <div class="legend-row">
+          <svg width="12" height="12" viewBox="0 0 14 14" aria-hidden="true"><polygon points="7,1.5 12,4 12,9.5 7,12 2,9.5 2,4" fill="var(--hex-fill)" stroke="#3B73B8" stroke-width="1.2"/></svg>
+          <span>Memories</span>
+          <span class="legend-count" id="legend-mem-count"></span>
+        </div>
+      </div>
+      <div class="legend-divider"></div>
+      <div class="legend-group">
+        <div class="legend-row">
+          <svg width="12" height="12" viewBox="0 0 14 14" aria-hidden="true"><polygon points="7,1.5 12,4 12,9.5 7,12 2,9.5 2,4" fill="var(--hex-fill)" stroke="#10B981" stroke-width="1.5"/></svg>
+          <span>Recent</span>
+        </div>
+        <div class="legend-row">
+          <svg width="12" height="12" viewBox="0 0 14 14" aria-hidden="true"><polygon points="7,1.5 12,4 12,9.5 7,12 2,9.5 2,4" fill="var(--hex-fill)" stroke="#F59E0B" stroke-width="1.5"/></svg>
+          <span>Expiring</span>
+        </div>
+        <div class="legend-row">
+          <svg width="12" height="12" viewBox="0 0 14 14" aria-hidden="true"><polygon points="7,1.5 12,4 12,9.5 7,12 2,9.5 2,4" fill="var(--hex-fill)" stroke="#EF4444" stroke-width="1.5"/></svg>
+          <span>Forgotten</span>
+        </div>
+      </div>
+      <div class="legend-divider"></div>
+      <div class="legend-group">
+        <div class="legend-row">
+          <div class="legend-line" style="border-color: #FBBF24;"></div>
+          <span>Derives</span>
+        </div>
+        <div class="legend-row">
+          <div class="legend-line" style="border-color: #A78BFA; border-width: 2px;"></div>
+          <span>Updates</span>
+        </div>
+        <div class="legend-row">
+          <div class="legend-line dashed" style="border-color: #38BDF8;"></div>
+          <span>Extends</span>
+        </div>
+      </div>
     </div>
   </div>
 

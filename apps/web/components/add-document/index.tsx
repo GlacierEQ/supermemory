@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import { useQueryState } from "nuqs"
 import { Dialog, DialogContent, DialogTitle } from "@repo/ui/components/dialog"
+import { Drawer, DrawerContent, DrawerTitle } from "@repo/ui/components/drawer"
 import { cn } from "@lib/utils"
 import { dmSansClassName } from "@/lib/fonts"
 import { FileTextIcon, GlobeIcon, ZapIcon, Loader2 } from "lucide-react"
@@ -16,7 +17,7 @@ import { toast } from "sonner"
 import { useDocumentMutations } from "../../hooks/use-document-mutations"
 import { useCustomer } from "autumn-js/react"
 import { useTokenUsage } from "@/hooks/use-token-usage"
-import { tokensToCredits, formatUsageNumber } from "@/lib/billing-utils"
+import { formatUsageNumber } from "@/lib/billing-utils"
 import { SpaceSelector } from "../space-selector"
 import { useIsMobile } from "@hooks/use-mobile"
 import { addDocumentParam } from "@/lib/search-params"
@@ -31,14 +32,36 @@ interface AddDocumentModalProps {
 export function AddDocumentModal({ isOpen, onClose }: AddDocumentModalProps) {
 	const isMobile = useIsMobile()
 
+	if (isMobile) {
+		return (
+			<Drawer
+				open={isOpen}
+				onOpenChange={(open: boolean) => !open && onClose()}
+				shouldScaleBackground
+			>
+				<DrawerContent
+					className={cn(
+						"flex flex-col gap-0 border-none bg-[#1B1F24] p-0",
+						"h-[85svh] max-h-[85svh] overflow-hidden",
+						"[&>div:first-child]:bg-[#3A4252] [&>div:first-child]:h-1 [&>div:first-child]:w-9 [&>div:first-child]:mt-2.5 [&>div:first-child]:mb-1",
+						dmSansClassName(),
+					)}
+				>
+					<DrawerTitle className="sr-only">Add Document</DrawerTitle>
+					<div className="min-h-0 flex-1 overflow-hidden">
+						<AddDocument onClose={onClose} isOpen={isOpen} />
+					</div>
+				</DrawerContent>
+			</Drawer>
+		)
+	}
+
 	return (
 		<Dialog open={isOpen} onOpenChange={(open: boolean) => !open && onClose()}>
 			<DialogContent
 				className={cn(
-					"border-none bg-[#1B1F24] flex flex-col p-3 md:p-4 gap-3",
-					isMobile
-						? "w-[calc(100vw-1rem)]! h-[calc(100dvh-1rem)]! max-w-none! max-h-none! rounded-xl"
-						: "w-[80%]! max-w-[1000px]! h-[80%]! max-h-[800px]! rounded-[22px]",
+					"border-none bg-[#1B1F24] flex flex-col",
+					"w-[80%]! max-w-[1000px]! h-[80%]! max-h-[800px]! rounded-[22px] p-4 gap-3",
 					dmSansClassName(),
 				)}
 				style={{
@@ -48,7 +71,7 @@ export function AddDocumentModal({ isOpen, onClose }: AddDocumentModalProps) {
 				showCloseButton={false}
 			>
 				<DialogTitle className="sr-only">Add Document</DialogTitle>
-				<div className="flex-1 overflow-hidden">
+				<div className="min-h-0 flex-1 overflow-hidden">
 					<AddDocument onClose={onClose} isOpen={isOpen} />
 				</div>
 			</DialogContent>
@@ -61,24 +84,28 @@ const tabs = [
 		id: "note" as const,
 		icon: FileTextIcon,
 		title: "Write a note",
+		compactLabel: "Note",
 		description: "Save your thoughts, notes and summaries, as memories",
 	},
 	{
 		id: "link" as const,
 		icon: GlobeIcon,
 		title: "Save a link",
+		compactLabel: "Links",
 		description: "Add any webpage into your searchable knowledge base",
 	},
 	{
 		id: "file" as const,
 		icon: FileTextIcon,
 		title: "Upload files",
+		compactLabel: "Files",
 		description: "Turn images, PDFs, documents, and markdown into memories",
 	},
 	{
 		id: "connect" as const,
 		icon: ZapIcon,
 		title: "Connect knowledge bases",
+		compactLabel: "Connections",
 		description: "Sync with Google Drive, Notion and OneDrive and import data",
 		isPro: true,
 	},
@@ -127,11 +154,8 @@ export function AddDocument({
 	const autumn = useCustomer()
 	const {
 		tokensUsed,
-		tokensLimit,
-		tokensPercent,
 		searchesUsed,
-		searchesLimit,
-		searchesPercent,
+		planUsagePct,
 		hasPaidPlan,
 		isLoading: isLoadingUsage,
 	} = useTokenUsage(autumn)
@@ -144,6 +168,8 @@ export function AddDocument({
 	useEffect(() => {
 		if (!isOpen) {
 			setFileData({ items: [], title: "", description: "" })
+			setNoteContent("")
+			setLinkData({ url: "", title: "", description: "" })
 		}
 	}, [isOpen])
 
@@ -259,36 +285,57 @@ export function AddDocument({
 		activeTab === "file" && (!fileTabHasPending || isSubmitting)
 
 	return (
-		<div className="h-full flex flex-col md:flex-row text-white md:space-x-5 space-y-3 md:space-y-0">
-			<div
-				className={cn(
-					"flex flex-col justify-between",
-					isMobile ? "w-full" : "w-1/3",
-				)}
-			>
-				<div
-					className={cn(
-						"flex gap-1",
-						isMobile
-							? "flex-row overflow-x-auto pb-2 scrollbar-thin"
-							: "flex-col",
-					)}
-				>
-					{tabs.map((tab) => (
-						<TabButton
-							key={tab.id}
-							active={activeTab === tab.id}
-							onClick={() => setActiveTab(tab.id)}
-							icon={tab.icon}
-							title={tab.title}
-							description={tab.description}
-							isPro={tab.isPro}
-							compact={isMobile}
-						/>
-					))}
+		<div className="flex h-full min-h-0 flex-col overflow-hidden text-white md:flex-row md:space-x-5">
+			{isMobile && !hasPaidPlan && (
+				<div className="flex shrink-0 justify-end px-4 pb-2">
+					<button
+						type="button"
+						onClick={async () => {
+							setIsUpgrading(true)
+							try {
+								const result = await autumn.attach({
+									planId: "api_pro",
+									successUrl: `${window.location.origin}/settings#account`,
+								})
+								if (result?.paymentUrl) {
+									window.open(result.paymentUrl, "_self")
+									return
+								}
+								autumn.refetch?.()
+							} catch (error) {
+								console.error(error)
+								toast.error("Failed to start checkout. Please try again.")
+							} finally {
+								setIsUpgrading(false)
+							}
+						}}
+						disabled={isUpgrading}
+						className={cn(
+							"shrink-0 cursor-pointer rounded-full bg-[#0054AD]/30 px-2.5 py-1 text-[11px] font-medium text-[#4BA0FA] transition-colors hover:bg-[#0054AD]/50 disabled:opacity-60",
+							dmSansClassName(),
+						)}
+					>
+						{isUpgrading ? "Upgrading…" : "Upgrade"}
+					</button>
 				</div>
+			)}
+			{!isMobile && (
+				<div className="flex w-1/3 flex-col justify-between">
+					<div className="flex flex-col gap-1">
+						{tabs.map((tab) => (
+							<TabButton
+								key={tab.id}
+								active={activeTab === tab.id}
+								onClick={() => setActiveTab(tab.id)}
+								icon={tab.icon}
+								title={tab.title}
+								compactLabel={tab.compactLabel}
+								description={tab.description}
+								isPro={tab.isPro}
+							/>
+						))}
+					</div>
 
-				{!isMobile && (
 					<div data-testid="usage-counter" className="flex flex-col gap-3 mr-4">
 						<div className="flex flex-col gap-2">
 							<div className="flex justify-between items-center">
@@ -298,72 +345,46 @@ export function AddDocument({
 										dmSansClassName(),
 									)}
 								>
-									Credits
+									Plan usage
 								</span>
 								<span
 									className={cn(
-										"text-sm font-medium",
+										"text-sm font-medium tabular-nums",
 										hasPaidPlan ? "text-[#4BA0FA]" : "text-[#737373]",
 										dmSansClassName(),
 									)}
 								>
 									{isLoadingUsage
 										? "…"
-										: `${tokensToCredits(tokensUsed)} / ${tokensToCredits(tokensLimit)}`}
+										: `${planUsagePct < 1 && planUsagePct > 0 ? "< 1" : Math.round(planUsagePct)}% used`}
 								</span>
 							</div>
 							<div className="h-2 w-full rounded-[40px] bg-[#2E353D] p-px overflow-hidden">
 								<div
 									className="h-full rounded-[40px]"
 									style={{
-										width: `${tokensPercent}%`,
+										width: `${planUsagePct}%`,
 										background:
-											tokensPercent > 80
+											planUsagePct > 80
 												? "#ef4444"
 												: hasPaidPlan
 													? "linear-gradient(to right, #4BA0FA 80%, #002757 100%)"
 													: "#0054AD",
 									}}
+									title={`${formatUsageNumber(tokensUsed)} tokens · ${formatUsageNumber(searchesUsed)} queries`}
 								/>
 							</div>
-						</div>
-
-						<div className="flex flex-col gap-2">
-							<div className="flex justify-between items-center">
-								<span
+							{!isLoadingUsage && (
+								<p
 									className={cn(
-										"text-[#FAFAFA] text-sm font-medium",
+										"text-xs text-[#737373] tabular-nums",
 										dmSansClassName(),
 									)}
 								>
-									Search Queries
-								</span>
-								<span
-									className={cn(
-										"text-sm font-medium",
-										hasPaidPlan ? "text-[#4BA0FA]" : "text-[#737373]",
-										dmSansClassName(),
-									)}
-								>
-									{isLoadingUsage
-										? "…"
-										: `${formatUsageNumber(searchesUsed)} / ${formatUsageNumber(searchesLimit)}`}
-								</span>
-							</div>
-							<div className="h-2 w-full rounded-[40px] bg-[#2E353D] p-px overflow-hidden">
-								<div
-									className="h-full rounded-[40px]"
-									style={{
-										width: `${searchesPercent}%`,
-										background:
-											searchesPercent > 80
-												? "#ef4444"
-												: hasPaidPlan
-													? "linear-gradient(to right, #4BA0FA 80%, #002757 100%)"
-													: "#0054AD",
-									}}
-								/>
-							</div>
+									{formatUsageNumber(tokensUsed)} tokens ·{" "}
+									{formatUsageNumber(searchesUsed)} queries
+								</p>
+							)}
 						</div>
 
 						{!hasPaidPlan && (
@@ -372,13 +393,19 @@ export function AddDocument({
 								onClick={async () => {
 									setIsUpgrading(true)
 									try {
-										await autumn.attach({
-											productId: "api_pro",
-											successUrl: "https://app.supermemory.ai/settings#account",
+										const result = await autumn.attach({
+											planId: "api_pro",
+											successUrl: `${window.location.origin}/settings#account`,
 										})
-										window.location.reload()
+										if (result?.paymentUrl) {
+											window.open(result.paymentUrl, "_self")
+											return
+										}
+										autumn.refetch?.()
 									} catch (error) {
 										console.error(error)
+										toast.error("Failed to start checkout. Please try again.")
+									} finally {
 										setIsUpgrading(false)
 									}
 								}}
@@ -400,7 +427,7 @@ export function AddDocument({
 								{isUpgrading ? (
 									<>
 										<Loader2 className="size-3 animate-spin mr-1.5" />
-										Upgrading...
+										Upgrading…
 									</>
 								) : (
 									"Upgrade to Pro"
@@ -409,22 +436,23 @@ export function AddDocument({
 							</button>
 						)}
 					</div>
-				)}
-			</div>
+				</div>
+			)}
 
 			<div
 				className={cn(
-					"flex flex-col flex-1 min-h-0 px-1",
-					isMobile ? "w-full" : "w-2/3",
+					"flex min-h-0 flex-1 flex-col",
+					isMobile ? "w-full px-4 pt-1" : "w-2/3 px-1",
 				)}
 			>
-				<div className="overflow-auto flex-1 min-h-0 scrollbar-thin">
+				<div className="min-h-0 flex-1 overflow-auto scrollbar-thin">
 					{activeTab === "note" && (
 						<NoteContent
 							onSubmit={handleNoteSubmit}
 							onContentChange={handleNoteContentChange}
 							isSubmitting={noteMutation.isPending}
 							isOpen={isOpen}
+							initialContent={noteContent}
 						/>
 					)}
 					{activeTab === "link" && (
@@ -433,6 +461,7 @@ export function AddDocument({
 							onDataChange={handleLinkDataChange}
 							isSubmitting={linkMutation.isPending}
 							isOpen={isOpen}
+							initialData={linkData}
 						/>
 					)}
 					{activeTab === "file" && (
@@ -452,10 +481,29 @@ export function AddDocument({
 				</div>
 				<div
 					className={cn(
-						"flex gap-2 pt-3 shrink-0",
-						isMobile ? "flex-col" : "justify-between",
+						"flex shrink-0",
+						isMobile
+							? "mx-[-1rem] mt-3 flex-col gap-3 border-t border-[#0F1621] bg-[#1B1F24] px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+							: "justify-between gap-2 pt-3",
 					)}
 				>
+					{isMobile && (
+						<div className="flex h-10 w-full shrink-0 items-center overflow-hidden rounded-full border border-[#1F2937] bg-[#0D121A] p-1">
+							{tabs.map((tab) => (
+								<TabButton
+									key={tab.id}
+									active={activeTab === tab.id}
+									onClick={() => setActiveTab(tab.id)}
+									icon={tab.icon}
+									title={tab.title}
+									compactLabel={tab.compactLabel}
+									description={tab.description}
+									isPro={tab.isPro}
+									compact
+								/>
+							))}
+						</div>
+					)}
 					{!isMobile && (
 						<SpaceSelector
 							selectedProjects={[localSelectedProject]}
@@ -463,20 +511,24 @@ export function AddDocument({
 								setLocalSelectedProject(projects[0] ?? localSelectedProject)
 							}
 							variant="insideOut"
-							singleSelect
 						/>
 					)}
 					<div
-						className={cn("flex items-center gap-2", isMobile && "justify-end")}
+						className={cn(
+							"flex items-center gap-2",
+							isMobile ? "w-full" : "justify-end",
+						)}
 					>
-						<Button
-							variant="ghost"
-							onClick={onClose}
-							disabled={isSubmitting}
-							className="text-[#737373] cursor-pointer rounded-full"
-						>
-							Cancel
-						</Button>
+						{!isMobile && (
+							<Button
+								variant="ghost"
+								onClick={onClose}
+								disabled={isSubmitting}
+								className="cursor-pointer rounded-full text-[#737373]"
+							>
+								Cancel
+							</Button>
+						)}
 						{activeTab !== "connect" && (
 							<Button
 								variant="insideOut"
@@ -484,11 +536,12 @@ export function AddDocument({
 								disabled={
 									activeTab === "file" ? fileTabSubmitDisabled : isSubmitting
 								}
+								className={cn(isMobile && "h-12 w-full px-5 text-[15px]")}
 							>
 								{isSubmitting ? (
 									<>
 										<Loader2 className="size-4 animate-spin mr-2" />
-										Adding...
+										Adding…
 									</>
 								) : (
 									<>
@@ -519,6 +572,7 @@ function TabButton({
 	onClick,
 	icon: Icon,
 	title,
+	compactLabel,
 	description,
 	isPro,
 	compact,
@@ -527,6 +581,7 @@ function TabButton({
 	onClick: () => void
 	icon: React.ComponentType<{ className?: string }>
 	title: string
+	compactLabel?: string
 	description: string
 	isPro?: boolean
 	compact?: boolean
@@ -537,21 +592,27 @@ function TabButton({
 				type="button"
 				onClick={onClick}
 				className={cn(
-					"flex items-center gap-2 px-3 py-2 rounded-full text-left transition-colors whitespace-nowrap focus:outline-none focus:ring-0 shrink-0",
-					active ? "bg-[#14161A] shadow-inside-out" : "hover:bg-[#14161A]/50",
+					"relative flex h-full min-w-0 flex-1 basis-0 cursor-pointer items-center justify-center gap-1 overflow-hidden rounded-full border border-transparent px-1 text-center transition-colors focus:outline-none focus:ring-0",
+					active
+						? "border-[#2261CA33] bg-[#00173C] text-white"
+						: "text-[#8B8B8B] hover:bg-white/5",
 					dmSansClassName(),
 				)}
 			>
-				<Icon className={cn("size-4 shrink-0 text-white")} />
 				<span
-					className={cn("font-medium text-white text-sm", dmSansClassName())}
+					className={cn(
+						"min-w-0 truncate text-[13px] font-medium",
+						dmSansClassName(),
+					)}
 				>
-					{title.split(" ")[0]}
+					{compactLabel ?? title.split(" ")[0]}
 				</span>
 				{isPro && (
-					<span className="bg-[#4BA0FA] text-black text-[8px] font-semibold px-1 py-0.5 rounded">
-						PRO
-					</span>
+					<span
+						role="img"
+						aria-label="Pro"
+						className="size-1.5 shrink-0 rounded-full bg-[#4BA0FA]"
+					/>
 				)}
 			</button>
 		)

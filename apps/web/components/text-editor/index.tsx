@@ -4,28 +4,36 @@ import { useEditor, EditorContent } from "@tiptap/react"
 import { BubbleMenu } from "@tiptap/react/menus"
 import type { Editor } from "@tiptap/core"
 import { Markdown } from "@tiptap/markdown"
-import { useRef, useEffect, useCallback } from "react"
-import { defaultExtensions } from "./extensions"
+import { useRef, useEffect, useCallback, useMemo } from "react"
+import { createDefaultExtensions } from "./extensions"
 import { slashCommand } from "./suggestions"
 import { Bold, Italic, Code } from "lucide-react"
 import { useDebouncedCallback } from "use-debounce"
 import { cn } from "@lib/utils"
 
-const extensions = [...defaultExtensions, slashCommand, Markdown]
-
 export function TextEditor({
 	content: initialContent,
 	onContentChange,
 	onSubmit,
+	debounceMs = 500,
+	autoFocus = false,
+	placeholder,
 }: {
 	content: string | undefined
 	onContentChange: (content: string) => void
 	onSubmit: () => void
+	debounceMs?: number
+	autoFocus?: boolean
+	placeholder?: string
 }) {
 	const containerRef = useRef<HTMLDivElement>(null)
 	const editorRef = useRef<Editor | null>(null)
 	const onSubmitRef = useRef(onSubmit)
 	const hasUserEditedRef = useRef(false)
+	const extensions = useMemo(
+		() => [...createDefaultExtensions(placeholder), slashCommand, Markdown],
+		[placeholder],
+	)
 
 	useEffect(() => {
 		onSubmitRef.current = onSubmit
@@ -36,7 +44,7 @@ export function TextEditor({
 		const json = editor.getJSON()
 		const markdown = editor.storage.markdown?.manager?.serialize(json) ?? ""
 		onContentChange?.(markdown)
-	}, 500)
+	}, debounceMs)
 
 	const editor = useEditor({
 		extensions,
@@ -48,6 +56,13 @@ export function TextEditor({
 		},
 		onUpdate: ({ editor }) => {
 			editorRef.current = editor
+			if (!hasUserEditedRef.current) return
+			if (debounceMs === 0) {
+				const json = editor.getJSON()
+				const markdown = editor.storage.markdown?.manager?.serialize(json) ?? ""
+				onContentChange?.(markdown)
+				return
+			}
 			debouncedUpdates(editor)
 		},
 		editorProps: {
@@ -82,6 +97,16 @@ export function TextEditor({
 			editor.commands.setContent(initialContent, { contentType: "markdown" })
 		}
 	}, [editor, initialContent])
+
+	useEffect(() => {
+		if (!editor || !autoFocus) return
+
+		const id = window.setTimeout(() => {
+			editor.commands.focus("end")
+		}, 0)
+
+		return () => window.clearTimeout(id)
+	}, [editor, autoFocus])
 
 	const handleClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
 		const target = e.target as HTMLElement
@@ -120,7 +145,7 @@ export function TextEditor({
 				tabIndex={0}
 				ref={containerRef}
 				onClick={handleClick}
-				className="w-full h-full outline-none prose prose-invert max-w-none [&_.ProseMirror]:outline-none [&_.ProseMirror]:focus:outline-none [&_.ProseMirror-focused]:outline-none text-editor-prose cursor-text"
+				className="size-full cursor-text outline-none prose prose-invert max-w-none text-editor-prose [&_.ProseMirror]:min-h-full [&_.ProseMirror]:outline-none [&_.ProseMirror]:text-[15px] [&_.ProseMirror]:leading-6 [&_.ProseMirror]:text-[#D7DEE8] [&_.ProseMirror-focused]:outline-none [&_.ProseMirror]:focus:outline-none"
 			>
 				<EditorContent editor={editor} />
 			</div>

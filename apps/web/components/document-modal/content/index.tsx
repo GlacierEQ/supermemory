@@ -12,6 +12,8 @@ import { WebPageContent } from "./web-page"
 import { TextEditorContent } from "./text-editor-content"
 import { GoogleDocViewer } from "./google-doc"
 import type { TextEditorProps } from "./text-editor-content"
+import type { ParsedPluginDocument } from "@/lib/plugin-document"
+import { PluginContent } from "./plugin-content"
 
 export type { TextEditorProps }
 
@@ -21,7 +23,7 @@ const PdfViewer = dynamic(
 		ssr: false,
 		loading: () => (
 			<div className="flex items-center justify-center h-full text-gray-400">
-				Loading PDF viewer...
+				Loading PDF viewer…
 			</div>
 		),
 	},
@@ -33,6 +35,7 @@ type DocumentWithMemories = DocumentsResponse["documents"][0]
 interface DocumentContentProps {
 	document: DocumentWithMemories | null
 	textEditorProps: TextEditorProps
+	pluginDocument?: ParsedPluginDocument | null
 }
 
 type ContentType =
@@ -73,10 +76,15 @@ function getContentType(document: DocumentWithMemories | null): ContentType {
 export function DocumentContent({
 	document,
 	textEditorProps,
+	pluginDocument,
 }: DocumentContentProps) {
 	const contentType = getContentType(document)
 
-	if (!document || !contentType) return null
+	if (!document) return null
+	if (pluginDocument) {
+		return <PluginContent parsed={pluginDocument} />
+	}
+	if (!contentType) return null
 
 	switch (contentType) {
 		case "image":
@@ -87,6 +95,7 @@ export function DocumentContent({
 				<TweetContent
 					url={document.url}
 					tweetMetadata={document.metadata?.sm_internal_twitter_metadata}
+					content={document.content}
 				/>
 			)
 
@@ -94,7 +103,7 @@ export function DocumentContent({
 			return <TextEditorContent {...textEditorProps} />
 
 		case "pdf":
-			return <PdfViewer url={document.url} />
+			return <PdfViewer url={document.url} documentId={document.id} />
 
 		case "notion":
 			return <NotionDoc content={document.content ?? ""} />

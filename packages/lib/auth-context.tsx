@@ -26,7 +26,9 @@ interface AuthContextType {
 	isRestoring: boolean
 	isSessionPending: boolean
 	setActiveOrg: (orgSlug: string) => Promise<void>
+	clearActiveOrg: () => Promise<void>
 	updateOrgMetadata: (partial: Record<string, unknown>) => void
+	refetchActiveOrg: () => Promise<Organization | null>
 	refetchOrganizations: () => Promise<unknown>
 }
 
@@ -42,7 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		isPending: orgsPending,
 	} = authClient.useListOrganizations()
 
-	const organizations: OrganizationListItem[] | null =
+	const organizations =
 		session?.session == null ? null : orgsPending ? null : (orgsData ?? [])
 
 	const refetchOrganizations = useCallback(
@@ -53,11 +55,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 	const setActiveOrg = useCallback(async (slug: string) => {
 		if (!slug) return
 
-		const activeOrg = await authClient.organization.setActive({
+		const res = await authClient.organization.setActive({
 			organizationSlug: slug,
 		})
-		setOrg(activeOrg)
+		setOrg(res?.data ?? null)
 		localStorage.setItem(STORAGE_KEY, slug)
+	}, [])
+
+	const clearActiveOrg = useCallback(async () => {
+		try {
+			await authClient.organization.setActive({ organizationId: null })
+		} catch {}
+		setOrg(null)
+		try {
+			localStorage.removeItem(STORAGE_KEY)
+		} catch {}
 	}, [])
 
 	const updateOrgMetadata = useCallback((partial: Record<string, unknown>) => {
@@ -73,10 +85,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		})
 	}, [])
 
+	const refetchActiveOrg = useCallback(async () => {
+		const full = await authClient.organization.getFullOrganization()
+		const nextOrg = full?.data ?? null
+		setOrg(nextOrg)
+		return nextOrg
+	}, [])
+
 	useEffect(() => {
-		if (isSessionPending) {
-			return
-		}
+		if (isSessionPending) return
 
 		if (!session?.session) {
 			setIsRestoring(false)
@@ -106,7 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 					if (!one) return
 					if (activeOrgId === one.id) {
 						const full = await authClient.organization.getFullOrganization()
-						if (!cancelled) setOrg(full)
+						if (!cancelled) setOrg(full?.data ?? null)
 					} else {
 						await setActiveOrg(one.slug)
 					}
@@ -119,7 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 					if (match) {
 						if (activeOrgId === match.id) {
 							const full = await authClient.organization.getFullOrganization()
-							if (!cancelled) setOrg(full)
+							if (!cancelled) setOrg(full?.data ?? null)
 						} else {
 							await setActiveOrg(savedSlug)
 						}
@@ -132,13 +149,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 					const fromList = orgs.find((o) => o.id === activeOrgId)
 					if (fromList) {
 						const full = await authClient.organization.getFullOrganization()
-						if (!cancelled) setOrg(full)
+						if (!cancelled) setOrg(full?.data ?? null)
 						return
 					}
 				}
 
 				const full = await authClient.organization.getFullOrganization()
-				if (!cancelled) setOrg(full)
+				if (!cancelled) setOrg(full?.data ?? null)
 			} catch (error) {
 				console.error("Failed to restore organization:", error)
 			} finally {
@@ -150,7 +167,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		return () => {
 			cancelled = true
 		}
-	}, [session, isSessionPending, orgsData, orgsPending, setActiveOrg])
+	}, [isSessionPending, session, orgsData, orgsPending, setActiveOrg])
 
 	useEffect(() => {
 		if (typeof window === "undefined") return
@@ -190,7 +207,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 				session: session?.session ?? null,
 				user: session?.user ?? null,
 				setActiveOrg,
+				clearActiveOrg,
 				updateOrgMetadata,
+				refetchActiveOrg,
 				refetchOrganizations,
 			}}
 		>

@@ -1,5 +1,6 @@
 "use client"
 
+import { memo } from "react"
 import type { DocumentsWithMemoriesResponseSchema } from "@repo/validation/api"
 import type { z } from "zod"
 import { dmSansClassName } from "@/lib/fonts"
@@ -9,7 +10,7 @@ import { extractYouTubeVideoId } from "../utils"
 type DocumentsResponse = z.infer<typeof DocumentsWithMemoriesResponseSchema>
 type DocumentWithMemories = DocumentsResponse["documents"][0]
 
-export function YoutubePreview({
+export const YoutubePreview = memo(function YoutubePreview({
 	document,
 }: {
 	document: DocumentWithMemories
@@ -20,12 +21,12 @@ export function YoutubePreview({
 		return (
 			<div className="bg-[#0B1017] p-3 rounded-[18px] space-y-2">
 				{document.title && (
-					<p className={cn(dmSansClassName(), "text-[12px] font-semibold")}>
+					<p className={cn(dmSansClassName(), "text-[13px] font-semibold")}>
 						{document.title}
 					</p>
 				)}
 				{document.content && (
-					<p className="text-[10px] text-[#737373] line-clamp-4">
+					<p className="text-[11px] text-[#737373] line-clamp-4">
 						{document.content}
 					</p>
 				)}
@@ -41,7 +42,7 @@ export function YoutubePreview({
 				<iframe
 					src={embedUrl}
 					title={document.title || "YouTube video"}
-					className="w-full h-full"
+					className="size-full"
 					allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
 					allowFullScreen
 					loading="lazy"
@@ -49,4 +50,4 @@ export function YoutubePreview({
 			</div>
 		</div>
 	)
-}
+})

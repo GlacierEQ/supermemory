@@ -48,7 +48,7 @@ export const DEFAULT_COLORS: GraphThemeColors = {
 	textPrimary: "#ffffff",
 	textSecondary: "#e2e8f0",
 	textMuted: "#94a3b8",
-	edgeDerives: "#7094B8",
+	edgeDerives: "#FBBF24",
 	edgeUpdates: "#A78BFA",
 	edgeExtends: "#38BDF8",
 	memBorderForgotten: "#EF4444",

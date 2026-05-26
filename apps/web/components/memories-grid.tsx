@@ -19,17 +19,24 @@ import { WebsitePreview } from "./document-cards/website-preview"
 import { GoogleDocsPreview } from "./document-cards/google-docs-preview"
 import { FilePreview } from "./document-cards/file-preview"
 import { NotePreview } from "./document-cards/note-preview"
+import {
+	claudeCodeTokenBadge,
+	parsePluginDocument,
+	type ParsedPluginDocument,
+} from "@/lib/plugin-document"
 import { YoutubePreview } from "./document-cards/youtube-preview"
 import { getAbsoluteUrl, isYouTubeUrl, useYouTubeChannelName } from "./utils"
 import { SyncLogoIcon } from "@ui/assets/icons"
 import { McpPreview } from "./document-cards/mcp-preview"
 import { NotionPreview } from "./document-cards/notion-preview"
-import { getFaviconUrl } from "@/lib/url-helpers"
+import { getFaviconUrl, isSupermemoryFileUrl } from "@/lib/url-helpers"
 import { QuickNoteCard } from "./quick-note-card"
-import { HighlightsCard, type HighlightItem } from "./highlights-card"
-import { GraphCard } from "./memory-graph"
+import type { HighlightItem } from "./highlights-card"
 import { Button } from "@ui/components/button"
-import { categoriesParam } from "@/lib/search-params"
+import {
+	categoriesParam,
+	type IntegrationParamValue,
+} from "@/lib/search-params"
 import { NovaEmptyState } from "@/components/nova/nova-empty-state"
 import {
 	AlertDialog,
@@ -41,7 +48,17 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 } from "@ui/components/alert-dialog"
-import { CheckIcon, Loader, Trash2Icon, XIcon } from "lucide-react"
+import {
+	AlignLeft,
+	BoxSelect,
+	CheckIcon,
+	LayoutGrid,
+	Loader,
+	Trash2Icon,
+	XIcon,
+} from "lucide-react"
+import { useProcessingDocuments } from "@/hooks/use-processing-documents"
+import { TimelineView } from "./timeline-view"
 
 // Document category type
 type DocumentCategory =
@@ -73,8 +90,51 @@ type OgData = {
 	image?: string
 }
 
+const ogCache = new Map<string, OgData>()
+const ogInflight = new Map<string, Promise<OgData | null>>()
+const ogFailures = new Map<string, number>()
+const OG_FAILURE_TTL = 30_000
+
+function fetchOgData(url: string): Promise<OgData | null> {
+	const cached = ogCache.get(url)
+	if (cached) return Promise.resolve(cached)
+
+	const failedAt = ogFailures.get(url)
+	if (failedAt && Date.now() - failedAt < OG_FAILURE_TTL) {
+		return Promise.resolve(null)
+	}
+
+	const inflight = ogInflight.get(url)
+	if (inflight) return inflight
+
+	const promise = fetch(`/api/og?url=${encodeURIComponent(url)}`)
+		.then((res) => {
+			if (!res.ok) throw new Error("Failed")
+			return res.json()
+		})
+		.then((data) => {
+			const result: OgData = { title: data?.title, image: data?.image }
+			if (!result.title && !result.image) {
+				throw new Error("Empty metadata")
+			}
+			ogCache.set(url, result)
+			ogInflight.delete(url)
+			ogFailures.delete(url)
+			return result
+		})
+		.catch(() => {
+			ogInflight.delete(url)
+			ogFailures.set(url, Date.now())
+			return null
+		})
+
+	ogInflight.set(url, promise)
+	return promise
+}
+
 const PAGE_SIZE = 100
 const MAX_TOTAL = 1000
+const EMPTY_SET = new Set<string>()
 
 const MEMORIES_LOADING_LABELS = [
 	"Getting your supermemories…",
@@ -126,7 +186,15 @@ function MemoriesGridLoading() {
 }
 
 // Discriminated union for masonry items
-type MasonryItem = { type: "document"; id: string; data: DocumentWithMemories }
+type MasonryItem =
+	| {
+			type: "document"
+			id: string
+			data: DocumentWithMemories
+			isSelectionMode: boolean
+			isSelected: boolean
+	  }
+	| { type: "quick-note"; id: "quick-note" }
 
 interface QuickNoteProps {
 	onSave: (content: string) => void
@@ -136,16 +204,14 @@ interface QuickNoteProps {
 
 interface HighlightsProps {
 	items: HighlightItem[]
-	onChat: (seed: string) => void
+	onChat: (highlightContent: string, userReply: string) => void
 	onShowRelated: (query: string) => void
 	isLoading: boolean
 }
 
 interface NovaEmptyStateProps {
 	onAddMemory: (tab: "note" | "link") => void
-	onOpenIntegrations: (
-		integration?: "import" | "chrome" | "connections",
-	) => void
+	onOpenIntegrations: (integration?: IntegrationParamValue) => void
 	isAllSpaces: boolean
 	spaceName?: string
 	onSwitchToAllSpaces?: () => void
@@ -171,7 +237,7 @@ export function MemoriesGrid({
 	isChatOpen,
 	onOpenDocument,
 	isSelectionMode = false,
-	selectedDocumentIds = new Set(),
+	selectedDocumentIds = EMPTY_SET,
 	onEnterSelectionMode,
 	onToggleSelection,
 	onClearSelection,
@@ -183,12 +249,26 @@ export function MemoriesGrid({
 	emptyStateProps,
 }: MemoriesGridProps) {
 	const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false)
+	const [localViewMode, setLocalViewMode] = useState<"grid" | "timeline">(
+		() => {
+			if (typeof window === "undefined") return "grid"
+			return (
+				(localStorage.getItem("memories-view-mode") as "grid" | "timeline") ??
+				"grid"
+			)
+		},
+	)
 	const { user, isSessionPending } = useAuth()
 	const { effectiveContainerTags } = useProject()
+	const processingStatusMap = useProcessingDocuments()
 	const isMobile = useIsMobile()
 	const [selectedCategories, setSelectedCategories] = useQueryState(
 		"categories",
 		categoriesParam,
+	)
+	const selectedCategoriesSet = useMemo(
+		() => new Set(selectedCategories),
+		[selectedCategories],
 	)
 
 	const { data: facetsData } = useQuery({
@@ -262,6 +342,11 @@ export function MemoriesGrid({
 		enabled: !!user,
 	})
 
+	const handleSetViewMode = useCallback((mode: "grid" | "timeline") => {
+		setLocalViewMode(mode)
+		localStorage.setItem("memories-view-mode", mode)
+	}, [])
+
 	const handleCategoryToggle = useCallback(
 		(category: DocumentCategory) => {
 			setSelectedCategories((prev) => {
@@ -287,23 +372,36 @@ export function MemoriesGrid({
 	}, [data])
 
 	const hasQuickNote = !!quickNoteProps
-	const hasHighlights = !!highlightsProps
+	const _hasHighlights = !!highlightsProps
 
 	const masonryItems: MasonryItem[] = useMemo(() => {
 		const items: MasonryItem[] = []
 
+		if (!isMobile && hasQuickNote) {
+			items.push({ type: "quick-note", id: "quick-note" })
+		}
+
 		for (const doc of documents) {
-			items.push({ type: "document", id: doc.id, data: doc })
+			items.push({
+				type: "document",
+				id: doc.id,
+				data: doc,
+				isSelectionMode,
+				isSelected: doc.id ? selectedDocumentIds.has(doc.id) : false,
+			})
 		}
 
 		return items
-	}, [documents])
+	}, [documents, isMobile, hasQuickNote, isSelectionMode, selectedDocumentIds])
 
-	// Stable key for Masonry based on document IDs, not item values
+	// Reset Masonry when the actual rendered item set changes. Masonic caches
+	// positions by index, so mobile removing the quick note must remount it.
 	const masonryKey = useMemo(() => {
-		const docIds = documents.map((d) => d.id).join(",")
-		return `masonry-${documents.length}-${docIds}-${isChatOpen}`
-	}, [documents, isChatOpen])
+		const itemIds = masonryItems.map((item) => item.id).join(",")
+		return `masonry-${isMobile ? "mobile" : "desktop"}-${masonryItems.length}-${itemIds}-${isChatOpen}`
+	}, [masonryItems, isChatOpen, isMobile])
+
+	const getMasonryItemKey = useCallback((item: MasonryItem) => item.id, [])
 
 	const isLoadingMore = isFetchingNextPage
 
@@ -355,6 +453,22 @@ export function MemoriesGrid({
 		onBulkDelete?.()
 	}, [onBulkDelete])
 
+	// All mutable values the render function needs — kept in a ref so the
+	// function identity never changes (masonic uses render as a React component
+	// type, so a new reference unmounts every item and kills textarea focus).
+	const renderRef = useRef({
+		quickNoteProps,
+		handleCardClick,
+		onToggleSelection,
+		processingStatusMap,
+	})
+	renderRef.current = {
+		quickNoteProps,
+		handleCardClick,
+		onToggleSelection,
+		processingStatusMap,
+	}
+
 	const renderMasonryItem = useCallback(
 		({
 			index,
@@ -365,6 +479,16 @@ export function MemoriesGrid({
 			data: MasonryItem
 			width: number
 		}) => {
+			const r = renderRef.current
+
+			if (data.type === "quick-note") {
+				return r.quickNoteProps ? (
+					<div style={{ width }} className="p-2">
+						<QuickNoteCard {...r.quickNoteProps} />
+					</div>
+				) : null
+			}
+
 			if (data.type === "document") {
 				const doc = data.data
 				return (
@@ -373,13 +497,16 @@ export function MemoriesGrid({
 							index={index}
 							data={doc}
 							width={width}
-							onClick={handleCardClick}
-							isSelectionMode={isSelectionMode}
-							isSelected={doc.id ? selectedDocumentIds.has(doc.id) : false}
+							onClick={r.handleCardClick}
+							isSelectionMode={data.isSelectionMode}
+							isSelected={data.isSelected}
 							onToggleSelection={
-								doc.id && onToggleSelection
-									? () => onToggleSelection(doc.id as string)
+								doc.id && r.onToggleSelection
+									? () => r.onToggleSelection?.(doc.id as string)
 									: undefined
+							}
+							processingStatus={
+								doc.id ? r.processingStatusMap.get(doc.id) : undefined
 							}
 						/>
 					</ErrorBoundary>
@@ -388,7 +515,8 @@ export function MemoriesGrid({
 
 			return null
 		},
-		[handleCardClick, isSelectionMode, selectedDocumentIds, onToggleSelection],
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[],
 	)
 
 	if (isSessionPending) {
@@ -408,18 +536,22 @@ export function MemoriesGrid({
 	const isEmpty = documents.length === 0 && !isPending
 	const showNovaEmptyState = isEmpty && emptyStateProps
 
+	const allVisibleSelected =
+		documents.length > 0 &&
+		documents.every((d) => d.id && selectedDocumentIds.has(d.id))
+
 	return (
 		<div className="relative">
-			{!isEmpty && (
+			{!isEmpty && !isSelectionMode && (
 				<div
 					id="filter-pills"
-					className="flex items-center justify-between gap-4 mb-3"
+					className="mb-3 flex flex-col gap-2 pr-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4"
 				>
-					<div className="flex flex-wrap items-center gap-1.5">
+					<div className="order-2 flex w-full min-w-0 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:order-1 sm:flex-wrap sm:overflow-visible">
 						<Button
 							className={cn(
 								dmSansClassName(),
-								"rounded-full border border-[#161F2C] bg-[#0D121A] px-2.5 py-1 text-xs h-auto hover:bg-[#00173C] hover:border-[#2261CA33]",
+								"shrink-0 whitespace-nowrap rounded-full border border-[#161F2C] bg-[#0D121A] px-2.5 py-1 text-xs h-auto hover:bg-[#00173C] hover:border-[#2261CA33]",
 								selectedCategories.length === 0 &&
 									"bg-[#00173C] border-[#2261CA33]",
 							)}
@@ -437,8 +569,8 @@ export function MemoriesGrid({
 								key={facet.category}
 								className={cn(
 									dmSansClassName(),
-									"rounded-full border border-[#161F2C] bg-[#0D121A] px-2.5 py-1 text-xs h-auto hover:bg-[#00173C] hover:border-[#2261CA33]",
-									selectedCategories.includes(facet.category) &&
+									"shrink-0 whitespace-nowrap rounded-full border border-[#161F2C] bg-[#0D121A] px-2.5 py-1 text-xs h-auto hover:bg-[#00173C] hover:border-[#2261CA33]",
+									selectedCategoriesSet.has(facet.category) &&
 										"bg-[#00173C] border-[#2261CA33]",
 								)}
 								onClick={() => handleCategoryToggle(facet.category)}
@@ -448,61 +580,129 @@ export function MemoriesGrid({
 							</Button>
 						))}
 					</div>
-					<div className="flex items-center gap-2 shrink-0">
-						{isSelectionMode && (
-							<>
-								<button
-									type="button"
-									aria-label="Exit selection mode"
-									className="w-8 h-8 flex items-center justify-center rounded-full border border-[#161F2C] bg-[#0D121A] hover:bg-[#00173C] transition-colors cursor-pointer"
-									onClick={onClearSelection}
-								>
-									<XIcon className="w-4 h-4 text-[#737373]" />
-								</button>
-								{selectedDocumentIds.size > 0 ? (
-									<>
-										<button
-											type="button"
-											className={cn(
-												dmSansClassName(),
-												"text-xs text-[#737373] hover:text-white transition-colors cursor-pointer",
-											)}
-											onClick={handleSelectAllVisible}
-										>
-											Select all
-										</button>
-										<button
-											type="button"
-											className={cn(
-												dmSansClassName(),
-												"flex items-center gap-1 text-xs text-red-400 hover:text-red-300 transition-colors cursor-pointer disabled:opacity-50",
-											)}
-											onClick={handleBulkDeleteClick}
-											disabled={isBulkDeleting}
-										>
-											<Trash2Icon className="w-3 h-3" />
-											Delete ({selectedDocumentIds.size})
-										</button>
-									</>
-								) : (
-									<p
-										className={cn(dmSansClassName(), "text-xs text-[#737373]")}
-									>
-										Select one or more documents
-									</p>
-								)}
-							</>
-						)}
-						{!isSelectionMode && onEnterSelectionMode && (
+					<div className="order-1 flex w-full items-center justify-between gap-2 sm:order-2 sm:w-auto sm:justify-start sm:self-start">
+						{/* View mode toggle — segmented control */}
+						<div
+							role="tablist"
+							aria-label="View mode"
+							className={cn(
+								dmSansClassName(),
+								"inline-flex h-8 items-center gap-0.5 rounded-full border border-[#161F2C] bg-[#0D121A] p-0.5",
+							)}
+						>
 							<button
 								type="button"
-								aria-label="Enter selection mode"
-								className="w-8 h-8 flex items-center justify-center rounded-full border border-[#161F2C] bg-[#0D121A] hover:bg-[#00173C] transition-colors cursor-pointer"
+								role="tab"
+								aria-selected={localViewMode === "grid"}
+								className={cn(
+									"inline-flex h-full items-center justify-center gap-1.5 rounded-full border px-2.5 text-xs font-medium cursor-pointer transition-colors",
+									localViewMode === "grid"
+										? "border-[#2261CA33] bg-[#00173C] text-white"
+										: "border-transparent text-[#737373] hover:bg-white/5",
+								)}
+								onClick={() => handleSetViewMode("grid")}
+							>
+								<LayoutGrid className="size-3.5" />
+								Grid
+							</button>
+							<button
+								type="button"
+								role="tab"
+								aria-selected={localViewMode === "timeline"}
+								className={cn(
+									"inline-flex h-full items-center justify-center gap-1.5 rounded-full border px-2.5 text-xs font-medium cursor-pointer transition-colors",
+									localViewMode === "timeline"
+										? "border-[#2261CA33] bg-[#00173C] text-white"
+										: "border-transparent text-[#737373] hover:bg-white/5",
+								)}
+								onClick={() => handleSetViewMode("timeline")}
+							>
+								<AlignLeft className="size-3.5" />
+								Timeline
+							</button>
+						</div>
+						{onEnterSelectionMode && (
+							<button
+								type="button"
+								aria-label="Select documents"
+								title="Select documents"
+								className="size-8 flex items-center justify-center rounded-full border border-[#161F2C] bg-[#0D121A] hover:bg-[#00173C] hover:border-[#2261CA33] transition-colors cursor-pointer"
 								onClick={onEnterSelectionMode}
 							>
-								<div className="w-3 h-3 rounded-[2.25px] border border-[#737373]" />
+								<BoxSelect className="size-4 text-[#737373]" />
 							</button>
 						)}
+					</div>
+				</div>
+			)}
+
+			{!isEmpty && isSelectionMode && (
+				<div
+					id="selection-toolbar"
+					className={cn(
+						dmSansClassName(),
+						"flex items-center justify-between gap-1.5 mb-3 mr-2 px-2.5 py-2 rounded-full border border-[#2261CA33] bg-[#00173C]/40 sm:gap-3 sm:px-3",
+					)}
+				>
+					<div className="flex min-w-0 shrink items-center gap-1.5 sm:gap-2">
+						<span className="flex items-center gap-1.5 text-xs text-[#FAFAFA] font-medium shrink-0">
+							<span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-[#369BFD] text-[#0B0F14] text-[11px] font-semibold">
+								{selectedDocumentIds.size}
+							</span>
+							<span className="hidden sm:inline">
+								{selectedDocumentIds.size === 1 ? "selected" : "selected"}
+							</span>
+						</span>
+						{selectedDocumentIds.size === 0 && (
+							<span className="hidden truncate text-xs text-[#737373] sm:inline">
+								Tap documents to select
+							</span>
+						)}
+					</div>
+					<div className="flex min-w-0 shrink-0 items-center gap-0.5 sm:gap-1">
+						<button
+							type="button"
+							className={cn(
+								"h-7 rounded-full px-2 text-xs transition-colors cursor-pointer sm:px-2.5",
+								allVisibleSelected
+									? "text-[#737373] hover:text-white"
+									: "text-[#FAFAFA] hover:bg-white/5",
+							)}
+							onClick={
+								allVisibleSelected ? onClearSelection : handleSelectAllVisible
+							}
+						>
+							{allVisibleSelected ? "Deselect all" : "Select visible"}
+						</button>
+						<button
+							type="button"
+							className={cn(
+								"flex h-7 items-center gap-1 rounded-full px-2 text-xs transition-colors cursor-pointer sm:px-3",
+								selectedDocumentIds.size === 0 || isBulkDeleting
+									? "text-[#737373]/60 cursor-not-allowed"
+									: "text-red-400 hover:text-red-300 hover:bg-red-500/10",
+							)}
+							onClick={handleBulkDeleteClick}
+							disabled={selectedDocumentIds.size === 0 || isBulkDeleting}
+						>
+							<Trash2Icon className="size-3" />
+							<span>Delete</span>
+							{selectedDocumentIds.size > 0 && (
+								<span className="text-red-400/70">
+									({selectedDocumentIds.size})
+								</span>
+							)}
+						</button>
+						<div className="w-px h-4 bg-[#161F2C] mx-1" />
+						<button
+							type="button"
+							aria-label="Exit selection mode"
+							className="flex h-7 items-center gap-1 rounded-full px-2 text-xs text-[#737373] transition-colors hover:text-white hover:bg-white/5 cursor-pointer sm:px-3"
+							onClick={onClearSelection}
+						>
+							<XIcon className="size-3" />
+							<span>Done</span>
+						</button>
 					</div>
 				</div>
 			)}
@@ -573,41 +773,34 @@ export function MemoriesGrid({
 				</div>
 			) : (
 				<div className="h-full overflow-auto scrollbar-thin">
-					{!isMobile && (hasQuickNote || hasHighlights) && (
-						<div className="flex gap-2 mb-2 px-2">
-							{hasQuickNote && quickNoteProps && (
-								<div className="w-[216px] shrink-0">
-									<QuickNoteCard {...quickNoteProps} />
-								</div>
-							)}
-							{hasHighlights && highlightsProps && (
-								<div className="flex-1 min-w-0">
-									<HighlightsCard {...highlightsProps} />
-								</div>
-							)}
-							<div className="w-[216px] shrink-0">
-								<GraphCard
-									containerTags={effectiveContainerTags}
-									width={200}
-									height={220}
-								/>
-							</div>
-						</div>
+					{localViewMode === "timeline" ? (
+						<TimelineView
+							documents={documents}
+							onOpenDocument={onOpenDocument}
+							hasNextPage={hasNextPage}
+							isFetchingNextPage={isFetchingNextPage}
+							onLoadMore={loadMoreDocuments}
+							isSelectionMode={isSelectionMode}
+							selectedDocumentIds={selectedDocumentIds}
+							onToggleSelection={onToggleSelection}
+						/>
+					) : (
+						<Masonry
+							key={masonryKey}
+							items={masonryItems}
+							render={renderMasonryItem}
+							itemKey={getMasonryItemKey}
+							columnGutter={0}
+							rowGutter={0}
+							columnWidth={260}
+							maxColumnCount={isMobile ? 1 : undefined}
+							itemHeightEstimate={200}
+							overscanBy={3}
+							onRender={maybeLoadMore}
+						/>
 					)}
-					<Masonry
-						key={masonryKey}
-						items={masonryItems}
-						render={renderMasonryItem}
-						columnGutter={0}
-						rowGutter={0}
-						columnWidth={216}
-						maxColumnCount={isMobile ? 1 : undefined}
-						itemHeightEstimate={200}
-						overscanBy={3}
-						onRender={maybeLoadMore}
-					/>
 
-					{isLoadingMore && (
+					{isLoadingMore && localViewMode === "grid" && (
 						<div className="py-10 flex items-center justify-center">
 							<Loader className="size-10 animate-spin text-sky-400" />
 						</div>
@@ -629,7 +822,7 @@ function DocumentUrlDisplay({ url }: { url: string }) {
 			<p
 				className={cn(
 					dmSansClassName(),
-					"text-[10px] text-[#737373] line-clamp-1",
+					"text-[11px] text-[#737373] line-clamp-1",
 				)}
 			>
 				{isLoading ? "YouTube" : channelName || "YouTube"}
@@ -641,7 +834,7 @@ function DocumentUrlDisplay({ url }: { url: string }) {
 		<p
 			className={cn(
 				dmSansClassName(),
-				"text-[10px] text-[#737373] line-clamp-1",
+				"text-[11px] text-[#737373] line-clamp-1",
 			)}
 		>
 			{getAbsoluteUrl(url)}
@@ -654,6 +847,74 @@ function isTemporaryId(id: string | null | undefined): boolean {
 	return id.startsWith("temp-") || id.startsWith("temp-file-")
 }
 
+const PROCESSING_WORDS = [
+	"Reading",
+	"Absorbing",
+	"Scanning",
+	"Thinking",
+	"Connecting",
+	"Pondering",
+	"Synthesizing",
+	"Reflecting",
+	"Understanding",
+	"Organizing",
+	"Memorizing",
+	"Filing",
+	"Saving",
+	"Learning",
+	"Cataloguing",
+	"Weaving",
+]
+
+function ProcessingBadge() {
+	const [wordIndex, setWordIndex] = useState(() =>
+		Math.floor(Math.random() * PROCESSING_WORDS.length),
+	)
+
+	useEffect(() => {
+		const id = setInterval(() => {
+			setWordIndex((i) => (i + 1) % PROCESSING_WORDS.length)
+		}, 1800)
+		return () => clearInterval(id)
+	}, [])
+
+	return (
+		<div className="flex items-center gap-1">
+			<span className="relative flex size-1.5 shrink-0">
+				<span className="animate-ping absolute inline-flex size-full rounded-full bg-sky-400 opacity-75" />
+				<span className="relative inline-flex rounded-full size-1.5 bg-sky-400" />
+			</span>
+			<span
+				className={cn(
+					dmSansClassName(),
+					"text-[10px] text-sky-400 font-medium",
+				)}
+			>
+				{PROCESSING_WORDS[wordIndex]}
+			</span>
+		</div>
+	)
+}
+
+function DoneBadge() {
+	return (
+		<div className="flex items-center gap-1">
+			<CheckIcon
+				className="size-2.5 text-emerald-400 shrink-0"
+				strokeWidth={3}
+			/>
+			<span
+				className={cn(
+					dmSansClassName(),
+					"text-[10px] text-emerald-400 font-medium",
+				)}
+			>
+				Done
+			</span>
+		</div>
+	)
+}
+
 const DocumentCard = memo(
 	({
 		index: _index,
@@ -663,6 +924,7 @@ const DocumentCard = memo(
 		isSelectionMode = false,
 		isSelected = false,
 		onToggleSelection,
+		processingStatus,
 	}: {
 		index: number
 		data: DocumentWithMemories
@@ -671,13 +933,30 @@ const DocumentCard = memo(
 		isSelectionMode?: boolean
 		isSelected?: boolean
 		onToggleSelection?: () => void
+		processingStatus?: string
 	}) => {
 		const canSelect =
 			!isTemporaryId(document.id) && !isTemporaryId(document.customId)
+		const pluginDocument = useMemo(
+			() => parsePluginDocument(document),
+			[document],
+		)
 		const [rotation, setRotation] = useState({ rotateX: 0, rotateY: 0 })
 		const cardRef = useRef<HTMLButtonElement>(null)
 		const [ogData, setOgData] = useState<OgData | null>(null)
-		const [isLoadingOg, setIsLoadingOg] = useState(false)
+		const [showDone, setShowDone] = useState(false)
+		const prevStatusRef = useRef<string | undefined>(processingStatus)
+
+		useEffect(() => {
+			const prev = prevStatusRef.current
+			prevStatusRef.current = processingStatus
+			// Show the "done" checkmark briefly when the card leaves the processing map
+			if (prev && !processingStatus) {
+				setShowDone(true)
+				const id = setTimeout(() => setShowDone(false), 2000)
+				return () => clearTimeout(id)
+			}
+		}, [processingStatus])
 
 		const ogImage = (document as DocumentWithMemories & { ogImage?: string })
 			.ogImage
@@ -686,7 +965,7 @@ const DocumentCard = memo(
 			document.type !== "notion_doc" &&
 			!document.url.includes("x.com") &&
 			!document.url.includes("twitter.com") &&
-			!document.url.includes("files.supermemory.ai") &&
+			!isSupermemoryFileUrl(document.url) &&
 			!document.url.includes("docs.googleapis.com") &&
 			!document.url.includes("notion.so") &&
 			(!document.title || !ogImage)
@@ -694,27 +973,31 @@ const DocumentCard = memo(
 		const hideURL = document.url?.includes("docs.googleapis.com")
 
 		useEffect(() => {
-			if (needsOgData && !ogData && !isLoadingOg && document.url) {
-				setIsLoadingOg(true)
-				fetch(`/api/og?url=${encodeURIComponent(document.url)}`)
-					.then((res) => {
-						if (!res.ok) throw new Error("Failed")
-						return res.json()
-					})
-					.then((data) => {
-						setOgData({
-							title: data?.title,
-							image: data?.image,
-						})
-					})
-					.catch(() => {
-						setOgData({})
-					})
-					.finally(() => {
-						setIsLoadingOg(false)
-					})
+			if (!needsOgData || ogData || !document.url) return
+
+			let timeoutId: ReturnType<typeof setTimeout>
+			let mounted = true
+
+			const attemptFetch = () => {
+				if (!mounted || !document.url) return
+				fetchOgData(document.url).then((data) => {
+					if (!mounted) return
+					if (data) {
+						setOgData(data)
+					} else {
+						// Retry when the global TTL expires
+						timeoutId = setTimeout(attemptFetch, 30_000)
+					}
+				})
 			}
-		}, [needsOgData, ogData, isLoadingOg, document.url])
+
+			attemptFetch()
+
+			return () => {
+				mounted = false
+				clearTimeout(timeoutId)
+			}
+		}, [needsOgData, ogData, document.url])
 
 		useEffect(() => {
 			if (isSelectionMode) setRotation({ rotateX: 0, rotateY: 0 })
@@ -754,11 +1037,11 @@ const DocumentCard = memo(
 						}}
 					>
 						{isSelected ? (
-							<div className="w-3 h-3 rounded-[2.25px] border border-[#369BFD] bg-[#369BFD] flex items-center justify-center">
-								<CheckIcon className="w-2 h-2 text-white" strokeWidth={3} />
+							<div className="size-3 rounded-[2.25px] border border-[#369BFD] bg-[#369BFD] flex items-center justify-center">
+								<CheckIcon className="size-2 text-white" strokeWidth={3} />
 							</div>
 						) : (
-							<div className="w-3 h-3 rounded-[2.25px] border border-[#737373]" />
+							<div className="size-3 rounded-[2.25px] border border-[#737373]" />
 						)}
 					</button>
 				)}
@@ -789,7 +1072,11 @@ const DocumentCard = memo(
 					{isSelectionMode && isSelected && (
 						<div className="absolute inset-0 bg-[rgba(75,160,250,0.25)] rounded-[22px] z-1 pointer-events-none" />
 					)}
-					<ContentPreview document={document} ogData={ogData} />
+					<ContentPreview
+						document={document}
+						ogData={ogData}
+						parsed={pluginDocument}
+					/>
 					{!(
 						document.type === "image" ||
 						document.type === "notion_doc" ||
@@ -797,15 +1084,16 @@ const DocumentCard = memo(
 					) && (
 						<div className="pb-[10px] space-y-1">
 							{document.url &&
-								!document.url.includes("x.com") &&
-								!document.url.includes("twitter.com") &&
-								!document.url.includes("files.supermemory.ai") && (
+								!isSupermemoryFileUrl(document.url) &&
+								(document.title ||
+									(!document.url.includes("x.com") &&
+										!document.url.includes("twitter.com"))) && (
 									<div className="px-3">
 										<div className="flex justify-between items-center gap-2">
 											<p
 												className={cn(
 													dmSansClassName(),
-													"text-[12px] text-[#E5E5E5] line-clamp-1 font-semibold",
+													"text-[13px] text-[#E5E5E5] line-clamp-1 font-semibold",
 												)}
 											>
 												{document.title || ogData?.title || "Untitled Document"}
@@ -814,7 +1102,7 @@ const DocumentCard = memo(
 												<img
 													src={getFaviconUrl(document.url) || ""}
 													alt=""
-													className="w-4 h-4 shrink-0 rounded-lg"
+													className="size-4 shrink-0 rounded-lg"
 													onError={(e) => {
 														e.currentTarget.style.display = "none"
 													}}
@@ -828,16 +1116,22 @@ const DocumentCard = memo(
 							<div
 								className={cn(
 									"flex items-center px-3",
-									document.memoryEntries.length > 0
+									processingStatus ||
+										showDone ||
+										document.memoryEntries.length > 0
 										? "justify-between"
 										: "justify-end",
 								)}
 							>
-								{document.memoryEntries.length > 0 && (
+								{processingStatus ? (
+									<ProcessingBadge />
+								) : showDone ? (
+									<DoneBadge />
+								) : document.memoryEntries.length > 0 ? (
 									<p
 										className={cn(
 											dmSansClassName(),
-											"text-[10px] text-[#369BFD] font-semibold flex items-center gap-1",
+											"text-[11px] text-[#369BFD] font-semibold flex items-center gap-1",
 										)}
 										style={{
 											background:
@@ -850,18 +1144,27 @@ const DocumentCard = memo(
 										<SyncLogoIcon className="w-[12.33px] h-[10px]" />
 										{document.memoryEntries.length}
 									</p>
-								)}
+								) : null}
 								<p
 									className={cn(
 										dmSansClassName(),
-										"text-[10px] text-[#737373] line-clamp-1",
+										"text-[11px] text-[#737373] line-clamp-1",
 									)}
 								>
-									{new Date(document.createdAt).toLocaleDateString("en-US", {
-										month: "short",
-										day: "numeric",
-										year: "numeric",
-									})}
+									{(() => {
+										const badge =
+											pluginDocument?.kind === "claude-code-doc"
+												? claudeCodeTokenBadge(document)
+												: null
+										const date = new Date(
+											document.createdAt,
+										).toLocaleDateString("en-US", {
+											month: "short",
+											day: "numeric",
+											year: "numeric",
+										})
+										return badge ? `${badge} · ${date}` : date
+									})()}
 								</p>
 							</div>
 						</div>
@@ -877,9 +1180,11 @@ DocumentCard.displayName = "DocumentCard"
 function ContentPreview({
 	document,
 	ogData,
+	parsed,
 }: {
 	document: DocumentWithMemories
 	ogData?: OgData | null
+	parsed?: ParsedPluginDocument | null
 }) {
 	if (
 		document.url?.includes("https://docs.googleapis.com/v1/documents") ||
@@ -889,10 +1194,7 @@ function ContentPreview({
 		return <GoogleDocsPreview document={document} />
 	}
 
-	if (
-		document.url?.includes("x.com/") &&
-		document.metadata?.sm_internal_twitter_metadata
-	) {
+	if (document.metadata?.sm_internal_twitter_metadata) {
 		return (
 			<TweetPreview
 				data={
@@ -902,8 +1204,15 @@ function ContentPreview({
 		)
 	}
 
+	if (
+		document.url?.includes("x.com/") ||
+		document.url?.includes("twitter.com/")
+	) {
+		return <NotePreview document={document} parsed={parsed} />
+	}
+
 	if (document.source === "mcp") {
-		return <McpPreview document={document} />
+		return <McpPreview document={document} parsed={parsed} />
 	}
 
 	if (isYouTubeUrl(document.url)) {
@@ -928,5 +1237,5 @@ function ContentPreview({
 	}
 
 	// Default to Note
-	return <NotePreview document={document} />
+	return <NotePreview document={document} parsed={parsed} />
 }

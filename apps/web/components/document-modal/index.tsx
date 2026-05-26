@@ -8,6 +8,7 @@ import {
 	Loader2,
 	Trash2Icon,
 	CheckIcon,
+	CopyIcon,
 } from "lucide-react"
 import type { z } from "zod"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
@@ -23,6 +24,8 @@ import { useDocumentMutations } from "@/hooks/use-document-mutations"
 import type { UseMutationResult } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { useIsMobile } from "@hooks/use-mobile"
+import { parsePluginDocument } from "@/lib/plugin-document"
+import { PluginDetails } from "./plugin-details"
 
 type DocumentsResponse = z.infer<typeof DocumentsWithMemoriesResponseSchema>
 type DocumentWithMemories = DocumentsResponse["documents"][0]
@@ -110,10 +113,10 @@ function DeleteButton({
 					transition={{ duration: 0.15 }}
 					onClick={() => setDeleteConfirmOpen(true)}
 					tabIndex={-1}
-					className="bg-[#0D121A] w-7 h-7 flex items-center justify-center rounded-full transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-offset-2 focus:outline-none cursor-pointer shadow-[inset_0_2px_4px_rgba(0,0,0,0.3),inset_0_1px_2px_rgba(0,0,0,0.1)]"
+					className="bg-[#0D121A] size-7 flex items-center justify-center rounded-full transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-offset-2 focus:outline-none cursor-pointer shadow-[inset_0_2px_4px_rgba(0,0,0,0.3),inset_0_1px_2px_rgba(0,0,0,0.1)]"
 					disabled={deleteMutation.isPending}
 				>
-					<Trash2Icon className="w-4 h-4 text-red-500" />
+					<Trash2Icon className="size-4 text-red-500" />
 					<span className="sr-only">Delete document</span>
 				</motion.button>
 			) : (
@@ -129,27 +132,60 @@ function DeleteButton({
 						type="button"
 						onClick={() => setDeleteConfirmOpen(false)}
 						disabled={deleteMutation.isPending}
-						className="w-6 h-6 flex items-center justify-center rounded-full transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-offset-2 focus:outline-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+						className="size-6 flex items-center justify-center rounded-full transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-offset-2 focus:outline-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
 					>
-						<XIcon className="w-4 h-4 text-[#737373]" />
+						<XIcon className="size-4 text-[#737373]" />
 						<span className="sr-only">Cancel delete</span>
 					</button>
 					<button
 						type="button"
 						onClick={handleDelete}
 						disabled={deleteMutation.isPending}
-						className="w-6 h-6 flex items-center justify-center rounded-full transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-offset-2 focus:outline-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+						className="size-6 flex items-center justify-center rounded-full transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-offset-2 focus:outline-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
 					>
 						{deleteMutation.isPending ? (
-							<Loader2 className="w-4 h-4 text-green-500 animate-spin" />
+							<Loader2 className="size-4 text-green-500 animate-spin" />
 						) : (
-							<CheckIcon className="w-4 h-4 text-green-500" />
+							<CheckIcon className="size-4 text-green-500" />
 						)}
 						<span className="sr-only">Confirm delete</span>
 					</button>
 				</motion.div>
 			)}
 		</AnimatePresence>
+	)
+}
+
+function CopySessionIdButton({ sessionId }: { sessionId: string }) {
+	const [copied, setCopied] = useState(false)
+
+	const handleCopy = useCallback(async () => {
+		try {
+			await navigator.clipboard.writeText(sessionId)
+			setCopied(true)
+			toast.success("Copy session id")
+			setTimeout(() => setCopied(false), 1500)
+		} catch {
+			toast.error("Failed to copy session id")
+		}
+	}, [sessionId])
+
+	return (
+		<button
+			type="button"
+			onClick={handleCopy}
+			tabIndex={-1}
+			title="Copy session id"
+			aria-label="Copy session id"
+			className="bg-[#0D121A] w-7 h-7 flex items-center justify-center rounded-full transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-offset-2 focus:outline-none cursor-pointer shadow-[inset_0_2px_4px_rgba(0,0,0,0.3),inset_0_1px_2px_rgba(0,0,0,0.1)]"
+		>
+			{copied ? (
+				<CheckIcon className="w-4 h-4 text-green-500" />
+			) : (
+				<CopyIcon className="w-4 h-4 text-[#737373]" />
+			)}
+			<span className="sr-only">Copy session id</span>
+		</button>
 	)
 }
 
@@ -168,6 +204,10 @@ export function DocumentModal({
 			initialEditorString: content ?? "",
 		}
 	}, [_document?.content])
+	const pluginDocument = useMemo(
+		() => parsePluginDocument(_document),
+		[_document],
+	)
 
 	const [draftContentString, setDraftContentString] =
 		useState(initialEditorString)
@@ -253,9 +293,14 @@ export function DocumentModal({
 							title={_document?.title}
 							documentType={_document?.type ?? "text"}
 							url={_document?.url}
+							pluginIconSrc={pluginDocument?.pluginIconSrc}
 						/>
 					</div>
 					<div className="flex items-center gap-1.5 md:gap-2 shrink-0">
+						{pluginDocument?.kind === "claude-code-doc" &&
+							_document?.customId && (
+								<CopySessionIdButton sessionId={_document.customId} />
+							)}
 						<DeleteButton
 							documentId={_document?.id}
 							customId={_document?.customId}
@@ -268,17 +313,17 @@ export function DocumentModal({
 								rel="noopener noreferrer"
 								className={cn(
 									"flex items-center gap-1 bg-[#0D121A] rounded-full shadow-[inset_0_2px_4px_rgba(0,0,0,0.3),inset_0_1px_2px_rgba(0,0,0,0.1)]",
-									isMobile ? "w-7 h-7 justify-center" : "px-3 py-2",
+									isMobile ? "size-7 justify-center" : "px-3 py-2",
 								)}
 							>
 								{!isMobile && (
 									<span className="line-clamp-1">Visit source</span>
 								)}
-								<ArrowUpRightIcon className="w-4 h-4 text-[#737373]" />
+								<ArrowUpRightIcon className="size-4 text-[#737373]" />
 							</a>
 						)}
 						<DialogPrimitive.Close
-							className="bg-[#0D121A] w-7 h-7 flex items-center justify-center rounded-full transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus:outline-none disabled:pointer-events-none cursor-pointer [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 shadow-[inset_0_2px_4px_rgba(0,0,0,0.3),inset_0_1px_2px_rgba(0,0,0,0.1)]"
+							className="bg-[#0D121A] size-7 flex items-center justify-center rounded-full transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus:outline-none disabled:pointer-events-none cursor-pointer [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 shadow-[inset_0_2px_4px_rgba(0,0,0,0.3),inset_0_1px_2px_rgba(0,0,0,0.1)]"
 							data-slot="dialog-close"
 							type="button"
 							tabIndex={-1}
@@ -298,6 +343,7 @@ export function DocumentModal({
 						<DocumentContent
 							document={_document}
 							textEditorProps={textEditorProps}
+							pluginDocument={pluginDocument}
 						/>
 					</div>
 					<div
@@ -307,10 +353,17 @@ export function DocumentModal({
 							dmSansClassName(),
 						)}
 					>
-						{_document?.summary && (
+						{pluginDocument &&
+							pluginDocument.kind !== "claude-code-doc" &&
+							pluginDocument.kind !== "openclaw-session" && (
+								<PluginDetails parsed={pluginDocument} />
+							)}
+						{_document && (_document.summary || pluginDocument?.summary) && (
 							<DocumentSummary
 								memoryEntries={_document.memoryEntries}
-								summary={_document.summary}
+								summary={
+									(pluginDocument?.summary ?? _document.summary) as string
+								}
 								createdAt={_document.createdAt}
 							/>
 						)}
