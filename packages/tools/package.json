@@ -13,7 +13,7 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.25",
     "@ai-sdk/openai": "^2.0.23",
-    "ai": "^5.0.29",
+    "ai": "^6.0.194",
     "lru-cache": "^11.2.6",
     "openai": "^4.104.0",
     "supermemory": "^3.0.0-alpha.26",
@@ -29,7 +29,7 @@
     "dotenv": "^16.6.1",
     "tsdown": "^0.14.2",
     "typescript": "^5.9.2",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.8"
   },
   "peerDependencies": {
     "@ai-sdk/provider": "^2.0.0 || ^3.0.0",

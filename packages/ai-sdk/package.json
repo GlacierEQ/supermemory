@@ -12,7 +12,7 @@
   "dependencies": {
     "@ai-sdk/openai": "^2.0.22",
     "@ai-sdk/provider": "^2.0.0",
-    "ai": "^5.0.113",
+    "ai": "^6.0.194",
     "supermemory": "^3.0.0-alpha.26"
   },
   "devDependencies": {
@@ -20,7 +20,7 @@
     "@types/bun": "^1.2.21",
     "tsdown": "^0.14.2",
     "typescript": "^5.9.2",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.8"
   },
   "main": "./dist/index.js",
   "module": "./dist/index.js",
