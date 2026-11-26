@@ -7,12 +7,18 @@ This is the idiomatic way to integrate persistent memory in Agent Framework,
 following the same pattern as the built-in Mem0 integration.
 """
 
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
-from agent_framework import BaseContextProvider
+from agent_framework import Message
+
+try:
+    from agent_framework import BaseContextProvider  # type: ignore[attr-defined]
+except ImportError:
+    from agent_framework import ContextProvider as BaseContextProvider
 
 from .connection import AgentSupermemory
 from .utils import (
+    _fetch_profile_and_search,
     convert_profile_to_markdown,
     create_logger,
     deduplicate_memories,
@@ -32,7 +38,7 @@ class SupermemoryContextProvider(BaseContextProvider):
     Example:
         ```python
         from agent_framework import Agent, AgentSession
-        from agent_framework.openai import OpenAIResponsesClient
+        from agent_framework.openai import OpenAIChatClient
         from supermemory_agent_framework import (
             AgentSupermemory,
             SupermemoryContextProvider,
@@ -46,7 +52,7 @@ class SupermemoryContextProvider(BaseContextProvider):
             store_conversations=True,
         )
 
-        agent = OpenAIResponsesClient().as_agent(
+        agent = OpenAIChatClient(model="gpt-5").as_agent(
             name="MemoryAgent",
             instructions="You are a helpful assistant with memory.",
             context_providers=[provider],
@@ -99,7 +105,6 @@ class SupermemoryContextProvider(BaseContextProvider):
         state: dict[str, Any],
     ) -> None:
         """Search Supermemory for relevant memories and inject into context."""
-        # Extract query text from input messages
         query_text = ""
         if self._mode != "profile":
             query_text = self._extract_query_from_context(context)
@@ -129,11 +134,9 @@ class SupermemoryContextProvider(BaseContextProvider):
             self._logger.debug("No memories found")
             return
 
-        # Prepend entity context if available
         if self._connection.entity_context:
             memories_text = f"{self._connection.entity_context}\n\n{memories_text}"
 
-        # Inject memories into the session context
         full_text = wrap_memory_injection(memories_text, self._context_prompt)
 
         self._logger.debug(
@@ -141,14 +144,12 @@ class SupermemoryContextProvider(BaseContextProvider):
             {"length": len(memories_text)},
         )
 
-        # Use extend_instructions to add memory context
         if hasattr(context, "extend_instructions"):
-            context.extend_instructions(full_text, source=self.source_id)
+            context.extend_instructions(self.source_id, full_text)
         elif hasattr(context, "extend_messages"):
-            # Fallback: add as a system message
             context.extend_messages(
-                [{"role": "system", "content": full_text}],
-                source=self.source_id,
+                self.source_id,
+                [Message("system", [full_text])],
             )
 
     async def after_run(
@@ -177,13 +178,11 @@ class SupermemoryContextProvider(BaseContextProvider):
                 },
             )
 
-            add_params: dict[str, Any] = {
-                "content": conversation_text,
-                "container_tag": self._container_tag,
-                "custom_id": self._connection.custom_id,
-            }
-
-            await self._client.add(**add_params)
+            await self._client.add(
+                self._container_tag,
+                content=conversation_text,
+                id=self._connection.custom_id,
+            )
 
             self._logger.info("Conversation stored successfully")
 
@@ -195,28 +194,23 @@ class SupermemoryContextProvider(BaseContextProvider):
 
     async def _fetch_memories(self, query_text: str = "") -> str:
         """Fetch and format memories from Supermemory."""
-        kwargs: dict[str, Any] = {"container_tag": self._container_tag}
-        if query_text:
-            kwargs["q"] = query_text
-
-        response = await self._client.profile(**kwargs)
-
-        profile = response.profile if response.profile else None
+        response, search = await _fetch_profile_and_search(
+            self._client,
+            self._container_tag,
+            include_profile=self._mode != "query",
+            query=query_text if self._mode != "profile" else "",
+        )
+        profile = response.profile if response else None
         static = list(profile.static) if profile and profile.static else []
         dynamic = list(profile.dynamic) if profile and profile.dynamic else []
-        search_results_raw = (
-            list(response.search_results.results)
-            if response.search_results and response.search_results.results
-            else []
-        )
+        search_results_raw = list(search.results) if search else []
 
         deduplicated = deduplicate_memories(
-            static=static,
-            dynamic=dynamic,
+            static=static if self._mode != "query" else [],
+            dynamic=dynamic if self._mode != "query" else [],
             search_results=search_results_raw,
         )
 
-        # Build formatted text based on mode
         profile_text = ""
         if self._mode != "query":
             profile_text = convert_profile_to_markdown(
@@ -282,13 +276,11 @@ class SupermemoryContextProvider(BaseContextProvider):
         """Extract conversation text from context for storage."""
         messages: list[Any] = []
 
-        # Gather input messages
         if hasattr(context, "input_messages"):
             messages.extend(context.input_messages or [])
         elif hasattr(context, "messages"):
             messages.extend(context.messages or [])
 
-        # Gather response messages
         if hasattr(context, "response") and context.response:
             resp = context.response
             if hasattr(resp, "text") and resp.text:

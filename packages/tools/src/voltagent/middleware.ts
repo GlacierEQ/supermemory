@@ -4,21 +4,42 @@
  * Provides memory retrieval, injection, and storage functionality.
  */
 
-import Supermemory from "supermemory"
+import type { SearchRequest, Supermemory } from "supermemory"
 import {
 	addConversation,
+	type ContentPart as ConversationContentPart,
 	type ConversationMessage,
+	toConversationImageUrl,
 } from "../conversations-client"
 import {
 	createLogger,
+	createSupermemoryClient,
 	normalizeBaseUrl,
-	MemoryCache,
-	buildMemoriesText,
-	extractQueryText,
+	defaultPromptTemplate,
+	stripMemoryContext,
+	PROFILE_SEARCH_THRESHOLD,
+	buildTurnRecall,
+	turnKey,
+	turnKeys,
+	withTurnMemory,
+	wrapMemoryContext,
+	TurnMemoryByConversation,
 	type Logger,
 	type MemoryMode,
+	type ProfileStructure,
+	type PromptTemplate,
+	type TurnRecallFetcher,
 } from "../shared"
-import type { SupermemoryVoltAgent, VoltAgentMessage } from "./types"
+import {
+	deduplicateMemoriesForMode,
+	getMemoryText,
+	normalizeMemoryFact,
+} from "../tools-shared"
+import type {
+	SearchFilter,
+	SupermemoryVoltAgent,
+	VoltAgentMessage,
+} from "./types"
 
 /**
  * Context for Supermemory middleware operations.
@@ -26,46 +47,30 @@ import type { SupermemoryVoltAgent, VoltAgentMessage } from "./types"
 export interface SupermemoryMiddlewareContext {
 	client: Supermemory
 	logger: Logger
-	containerTag: string
-	customId: string
+	namespace: string
+	id: string
 	mode: MemoryMode
 	addMemory: "always" | "never"
 	normalizedBaseUrl: string
 	apiKey: string
-	promptTemplate?: (data: {
-		userMemories: string
-		generalSearchMemories: string
-		searchResults: Array<{ memory: string; metadata?: Record<string, unknown> }>
-	}) => string
-	/**
-	 * Per-turn memory cache. Stores the injected memories string for each
-	 * user turn (keyed by turnKey) to avoid redundant API calls.
-	 */
-	memoryCache: MemoryCache<string>
-	// New search parameters
+	promptTemplate?: PromptTemplate
+	turns: TurnMemoryByConversation
 	threshold?: number
 	limit?: number
-	rerank?: boolean
+	rerank?: SupermemoryVoltAgent["rerank"]
 	rewriteQuery?: boolean
-	filters?: { OR: Array<unknown> } | { AND: Array<unknown> }
-	include?: {
-		chunks?: boolean
-		documents?: boolean
-		forgottenMemories?: boolean
-		relatedMemories?: boolean
-		summaries?: boolean
-	}
-	// Storage parameters
+	filter?: SearchFilter
+	include?: SupermemoryVoltAgent["include"]
 	metadata?: Record<string, string | number | boolean>
-	searchMode?: "memories" | "documents" | "hybrid"
-	entityContext?: string
+	supportingContext?: string
+	searchMode?: SupermemoryVoltAgent["searchMode"]
 }
 
 /**
  * Creates a Supermemory middleware context.
  */
 export const createSupermemoryContext = (
-	containerTag: string,
+	namespace: string,
 	options: SupermemoryVoltAgent,
 ): SupermemoryMiddlewareContext => {
 	const apiKey = options.apiKey ?? process.env.SUPERMEMORY_API_KEY
@@ -76,7 +81,7 @@ export const createSupermemoryContext = (
 	}
 
 	const {
-		customId,
+		id,
 		mode = "profile",
 		addMemory = "always", // VoltAgent default: save conversations by default for chat apps
 		baseUrl,
@@ -85,310 +90,275 @@ export const createSupermemoryContext = (
 		limit,
 		rerank,
 		rewriteQuery,
-		filters,
+		filter,
 		include,
 		metadata,
+		supportingContext,
 		searchMode,
-		entityContext,
 		verbose = false,
 	} = options
 
-	// Runtime validation: customId is required
-	if (!customId || typeof customId !== "string" || customId.trim() === "") {
+	// Runtime validation: id is required
+	if (!id || typeof id !== "string" || id.trim() === "") {
 		throw new Error(
-			"customId is required and must be a non-empty string — provide it via `options.customId`",
+			"id is required and must be a non-empty string — provide it via `options.id`",
 		)
+	}
+	if (
+		threshold !== undefined &&
+		(!Number.isFinite(threshold) || threshold < 0 || threshold > 1)
+	) {
+		throw new Error("threshold must be between 0 and 1")
+	}
+	if (
+		limit !== undefined &&
+		(!Number.isInteger(limit) || limit < 1 || limit > 100)
+	) {
+		throw new Error("limit must be an integer between 1 and 100")
 	}
 
 	const logger = createLogger(verbose)
 	const normalizedBaseUrl = normalizeBaseUrl(baseUrl)
 
-	const client = new Supermemory({
+	const client = createSupermemoryClient({
 		apiKey,
-		...(normalizedBaseUrl !== "https://api.supermemory.ai"
-			? { baseURL: normalizedBaseUrl }
-			: {}),
+		baseUrl: normalizedBaseUrl,
+		source: "tools-voltagent",
 	})
 
 	return {
 		client,
 		logger,
-		containerTag,
-		customId,
+		namespace,
+		id,
 		mode,
 		addMemory,
 		normalizedBaseUrl,
 		apiKey,
 		promptTemplate,
-		memoryCache: new MemoryCache<string>(),
+		turns: new TurnMemoryByConversation(),
 		threshold,
 		limit,
 		rerank,
 		rewriteQuery,
-		filters,
+		filter,
 		include,
 		metadata,
+		supportingContext,
 		searchMode,
-		entityContext,
 	}
 }
 
-/**
- * Generates a cache key for the current turn based on context and user message.
- */
-const makeTurnKey = (
-	ctx: SupermemoryMiddlewareContext,
-	userMessage: string,
-): string => {
-	return MemoryCache.makeTurnKey(
-		ctx.containerTag,
-		ctx.customId,
-		ctx.mode,
-		userMessage,
-	)
+type VoltAgentContentPart = {
+	type: string
+	text?: string
+	[key: string]: unknown
 }
 
-/**
- * Checks if this is a new user turn (last message is from user).
- */
-const isNewUserTurn = (messages: VoltAgentMessage[]): boolean => {
-	const lastMessage = messages.at(-1)
-	return lastMessage?.role === "user"
-}
-
-/**
- * Extracts the last user message text from messages array.
- */
-const getLastUserMessage = (messages: VoltAgentMessage[]): string => {
-	const lastUserMessage = messages
-		.slice()
-		.reverse()
-		.find((msg) => msg.role === "user")
-
-	if (!lastUserMessage) {
-		return ""
+const getMessageContent = (
+	message: VoltAgentMessage,
+): string | VoltAgentContentPart[] => {
+	if (Array.isArray(message.parts)) return message.parts
+	if (typeof message.content === "string" || Array.isArray(message.content)) {
+		return message.content
 	}
-
-	const content = lastUserMessage.content
-
-	if (typeof content === "string") {
-		return content
-	}
-
-	if (Array.isArray(content)) {
-		return content
-			.filter((part) => part.type === "text")
-			.map((part) => part.text || "")
-			.join(" ")
-	}
-
 	return ""
 }
 
-/**
- * Retrieves and injects memories into messages.
- * Returns enhanced messages with memories injected into system prompt.
- *
- * @param searchMessages - Messages to search for user input (VoltAgent's input messages)
- * @param ctx - Supermemory middleware context
- * @param systemMessages - System messages to inject memories into (VoltAgent's prepared messages)
- */
-export const enhanceMessagesWithMemories = async (
-	searchMessages: VoltAgentMessage[],
+const getMessageText = (message: VoltAgentMessage): string => {
+	const content = getMessageContent(message)
+	if (typeof content === "string") return content
+	return content
+		.filter((part) => part.type === "text")
+		.map((part) => part.text || "")
+		.join(" ")
+}
+
+const withMessageMemory = (
+	message: VoltAgentMessage,
+	memories: string,
+): VoltAgentMessage => {
+	if (Array.isArray(message.parts)) {
+		return { ...message, parts: withTurnMemory(message.parts, memories) }
+	}
+	if (typeof message.content === "string" || Array.isArray(message.content)) {
+		return { ...message, content: withTurnMemory(message.content, memories) }
+	}
+	return message
+}
+
+const searchWithAdvancedOptions = async (
 	ctx: SupermemoryMiddlewareContext,
-	systemMessages?: VoltAgentMessage[],
-): Promise<VoltAgentMessage[]> => {
-	const messagesToEnhance = systemMessages || searchMessages
-	const messages = searchMessages
+	queryText: string,
+	mode: MemoryMode,
+	profile: Promise<ProfileStructure["profile"]> | undefined,
+	signal: AbortSignal,
+): Promise<string> => {
+	ctx.logger.info("Using advanced search with custom parameters")
 
-	const userMessage = getLastUserMessage(messages)
-
-	if (ctx.mode !== "profile" && !userMessage) {
-		ctx.logger.debug("No user message found, skipping memory search")
-		return messagesToEnhance
+	const searchParams: SearchRequest = {
+		query: queryText,
+		searchMode: ctx.searchMode ?? "memories",
+		threshold: ctx.threshold ?? PROFILE_SEARCH_THRESHOLD,
 	}
 
-	const turnKey = makeTurnKey(ctx, userMessage || "")
-	const isNewTurn = isNewUserTurn(messages)
+	if (ctx.limit !== undefined) searchParams.limit = ctx.limit
+	if (ctx.rerank !== undefined) searchParams.rerank = ctx.rerank
+	if (ctx.rewriteQuery !== undefined)
+		searchParams.rewriteQuery = ctx.rewriteQuery
+	if (ctx.filter !== undefined) searchParams.filter = ctx.filter
+	if (ctx.include !== undefined) searchParams.include = ctx.include
 
-	const cachedMemories = ctx.memoryCache.get(turnKey)
-	if (!isNewTurn && cachedMemories) {
-		ctx.logger.debug("Using cached memories", { turnKey })
-		return injectMemoriesIntoMessages(
-			messagesToEnhance,
-			cachedMemories,
-			ctx.logger,
-		)
+	const [response, profileData] = await Promise.all([
+		ctx.client.search(ctx.namespace, searchParams, {
+			maxRetries: 0,
+			abortSignal: signal,
+		}),
+		mode === "full" ? profile : undefined,
+	])
+
+	const searchResults = response.results.flatMap((result) => {
+		const memory = getMemoryText(result)
+		if (!memory) {
+			return []
+		}
+
+		return [{ ...result, memory }]
+	})
+	const deduplicated = deduplicateMemoriesForMode(mode, {
+		static: profileData?.static,
+		dynamic: profileData?.dynamic,
+		searchResults,
+	})
+	const searchResultByKey = new Map<string, (typeof searchResults)[number]>()
+	for (const result of searchResults) {
+		const key = normalizeMemoryFact(result.memory)
+		if (!searchResultByKey.has(key)) {
+			searchResultByKey.set(key, result)
+		}
 	}
+	const deduplicatedSearchResults = deduplicated.searchResults
+		.map((memory) => {
+			const original = searchResultByKey.get(normalizeMemoryFact(memory))
+			return original ? { ...original, memory } : undefined
+		})
+		.filter((result) => result !== undefined)
+	const generalSearchMemories =
+		deduplicated.searchResults.length > 0
+			? `Search results for user's recent message: \n${deduplicated.searchResults
+					.map((memory) => `- ${memory}`)
+					.join("\n")}`
+			: ""
 
-	ctx.logger.info("Starting memory search", {
-		containerTag: ctx.containerTag,
-		customId: ctx.customId,
-		mode: ctx.mode,
-		isNewTurn,
+	ctx.logger.debug("Advanced memory deduplication completed", {
+		profileStatic: deduplicated.static.length,
+		profileDynamic: deduplicated.dynamic.length,
+		searchResults: deduplicated.searchResults.length,
 	})
 
-	const genericMessages = messages.map((msg) => ({
-		role: msg.role,
-		content: msg.content,
-	}))
+	return (ctx.promptTemplate ?? defaultPromptTemplate)({
+		userMemories: "",
+		generalSearchMemories,
+		searchResults: deduplicatedSearchResults,
+	})
+}
 
-	const queryText = extractQueryText(genericMessages, ctx.mode)
-
+const recallTurn = (
+	ctx: SupermemoryMiddlewareContext,
+	queryText: string,
+): TurnRecallFetcher => {
 	const useAdvancedSearch =
 		ctx.threshold !== undefined ||
 		ctx.limit !== undefined ||
 		ctx.rerank !== undefined ||
 		ctx.rewriteQuery !== undefined ||
-		ctx.filters !== undefined ||
+		ctx.filter !== undefined ||
 		ctx.include !== undefined ||
 		ctx.searchMode !== undefined
+	return buildTurnRecall({
+		namespace: ctx.namespace,
+		query: queryText,
+		mode: ctx.mode,
+		baseUrl: ctx.normalizedBaseUrl,
+		apiKey: ctx.apiKey,
+		source: "tools-voltagent",
+		logger: ctx.logger,
+		promptTemplate: ctx.promptTemplate,
+		...(useAdvancedSearch && {
+			search: (profile, signal) =>
+				searchWithAdvancedOptions(ctx, queryText, ctx.mode, profile, signal),
+		}),
+	})
+}
 
-	// Warn if advanced search params are set but mode is "profile"
-	// Profile mode only fetches static/dynamic user data, not query-based search
-	if (useAdvancedSearch && ctx.mode === "profile") {
+/**
+ * Retrieves memories for the latest user message: search results are appended to that
+ * message and the conversation's frozen profile to the system message. Earlier user messages
+ * get back the exact block they first received, so the prompt prefix stays cacheable.
+ * Returns new messages; the input is not mutated.
+ *
+ * @param messages - VoltAgent messages to enhance
+ * @param ctx - Supermemory middleware context
+ * @param conversationId - Conversation whose memories to reuse (default: ctx.id)
+ */
+export const enhanceMessagesWithMemories = async (
+	messages: VoltAgentMessage[],
+	ctx: SupermemoryMiddlewareContext,
+	conversationId: string = ctx.id,
+): Promise<VoltAgentMessage[]> => {
+	const latest = messages.filter((message) => message.role === "user").at(-1)
+	if (!latest) return messages
+
+	if (
+		ctx.mode === "profile" &&
+		(ctx.threshold !== undefined ||
+			ctx.limit !== undefined ||
+			ctx.rerank !== undefined ||
+			ctx.rewriteQuery !== undefined ||
+			ctx.filter !== undefined ||
+			ctx.include !== undefined ||
+			ctx.searchMode !== undefined)
+	) {
 		ctx.logger.warn(
-			"Advanced search parameters (threshold, limit, rerank, rewriteQuery, filters, include, searchMode) " +
+			"Advanced search parameters (threshold, limit, rerank, rewriteQuery, filter, include, searchMode) " +
 				'are ignored when mode is "profile". Use mode "query" or "full" to enable advanced search.',
 		)
 	}
 
-	let memories: string
+	const keys = turnKeys(messages, (message) => ({
+		role: message.role,
+		text: getMessageText(message),
+	}))
+	const memory = ctx.turns.for(conversationId)
+	const query = turnKey(getMessageText(latest))
+	await memory.recall(keys.get(latest) as string, recallTurn(ctx, query))
 
-	if (useAdvancedSearch && ctx.mode !== "profile") {
-		ctx.logger.info("Using advanced search with custom parameters")
-
-		const searchParams: {
-			q: string
-			containerTag: string
-			threshold?: number
-			limit?: number
-			rerank?: boolean
-			rewriteQuery?: boolean
-			filters?: { OR: Array<unknown> } | { AND: Array<unknown> }
-			include?: {
-				chunks?: boolean
-				documents?: boolean
-				forgottenMemories?: boolean
-				relatedMemories?: boolean
-				summaries?: boolean
-			}
-			searchMode?: "memories" | "documents" | "hybrid"
-		} = {
-			q: queryText,
-			containerTag: ctx.containerTag,
-		}
-
-		if (ctx.threshold !== undefined) searchParams.threshold = ctx.threshold
-		if (ctx.limit !== undefined) searchParams.limit = ctx.limit
-		if (ctx.rerank !== undefined) searchParams.rerank = ctx.rerank
-		if (ctx.rewriteQuery !== undefined)
-			searchParams.rewriteQuery = ctx.rewriteQuery
-		if (ctx.filters !== undefined) searchParams.filters = ctx.filters
-		if (ctx.include !== undefined) searchParams.include = ctx.include
-		if (ctx.searchMode !== undefined) searchParams.searchMode = ctx.searchMode
-
-		const response = await ctx.client.search.memories(searchParams)
-
-		// Hybrid search returns both memory entries (`memory` field) and
-		// document chunks (`chunk` field). Handle both.
-		type SearchResult = {
-			memory?: string
-			chunk?: string
-			metadata?: Record<string, unknown>
-		}
-		const formattedMemories = response.results
-			.map((result: SearchResult) => {
-				const text = result.memory || result.chunk
-				return text ? `- ${text}` : null
-			})
-			.filter(Boolean)
-			.join("\n")
-
-		memories = ctx.promptTemplate
-			? ctx.promptTemplate({
-					userMemories: "",
-					generalSearchMemories: formattedMemories,
-					searchResults: response.results as Array<{
-						memory: string
-						metadata?: Record<string, unknown>
-					}>,
-				})
-			: `The following are relevant memories and context about this user retrieved from previous interactions. Use these to personalize your response:\n\n${formattedMemories}`
-	} else {
-		memories = await buildMemoriesText({
-			containerTag: ctx.containerTag,
-			queryText,
-			mode: ctx.mode,
-			baseUrl: ctx.normalizedBaseUrl,
-			apiKey: ctx.apiKey,
-			logger: ctx.logger,
-			promptTemplate: ctx.promptTemplate,
-		})
+	const blocks = await Promise.all(
+		messages.map((message) => {
+			const key = keys.get(message)
+			return key === undefined ? undefined : memory.get(key)
+		}),
+	)
+	const withBlocks = messages.map((message, index) => {
+		const block = blocks[index]
+		return block === undefined ? message : withMessageMemory(message, block)
+	})
+	const system = withBlocks.findIndex((message) => message.role === "system")
+	if (system !== -1) {
+		return withBlocks.map((message, index) =>
+			index === system ? withMessageMemory(message, memory.profile) : message,
+		)
 	}
-
-	ctx.memoryCache.set(turnKey, memories)
-	ctx.logger.debug("Cached memories for turn", { turnKey })
-
-	return injectMemoriesIntoMessages(messagesToEnhance, memories, ctx.logger)
-}
-
-/**
- * Injects memories into messages by appending to existing system prompt
- * or creating a new one. Pure function - does not mutate the original messages.
- *
- * VoltAgent uses AI SDK v5's UIMessage format which requires `id` and `parts`
- * (not just `content`). We must conform to this format for messages to
- * actually reach the LLM.
- */
-const injectMemoriesIntoMessages = (
-	messages: VoltAgentMessage[],
-	memories: string,
-	logger: Logger,
-): VoltAgentMessage[] => {
-	const systemMessageIndex = messages.findIndex((msg) => msg.role === "system")
-
-	if (systemMessageIndex !== -1) {
-		logger.debug("Added memories to existing system message")
-		const newMessages = [...messages]
-		const systemMessage = newMessages[systemMessageIndex]
-		if (!systemMessage) {
-			return messages
-		}
-
-		// Extract existing text from parts (UIMessage format) or content fallback
-		const parts = (
-			systemMessage as { parts?: Array<{ type: string; text?: string }> }
-		).parts
-		const existingContent = parts
-			? parts
-					.filter((p) => p.type === "text")
-					.map((p) => p.text || "")
-					.join("\n")
-			: typeof systemMessage.content === "string"
-				? systemMessage.content
-				: ""
-
-		const newContent = `${existingContent}\n\n${memories}`
-
-		newMessages[systemMessageIndex] = {
-			...systemMessage,
-			content: newContent,
-			// Update parts array to match - this is what the LLM actually reads
-			parts: [{ type: "text", text: newContent }],
-		} as VoltAgentMessage
-		return newMessages
-	}
-
-	logger.debug("Created system message with memories")
+	const profile = wrapMemoryContext(memory.profile)
+	if (!profile) return withBlocks
 	return [
 		{
-			id: crypto.randomUUID(),
-			role: "system" as const,
-			content: memories,
-			parts: [{ type: "text", text: memories }],
-		} as VoltAgentMessage,
-		...messages,
+			id: `supermemory-profile-${conversationId}`,
+			role: "system",
+			content: profile,
+			parts: [{ type: "text", text: profile }],
+		},
+		...withBlocks,
 	]
 }
 
@@ -399,46 +369,75 @@ const convertToConversationMessages = (
 	messages: VoltAgentMessage[],
 ): ConversationMessage[] => {
 	const conversationMessages: ConversationMessage[] = []
+	const convertPart = (
+		part: VoltAgentContentPart,
+	): ConversationContentPart | null => {
+		if (part.type === "text" && typeof part.text === "string") {
+			const text = stripMemoryContext(part.text)
+			return text ? { type: "text", text } : null
+		}
+
+		if (part.type === "file") {
+			const mediaType = part.mediaType
+			const url =
+				typeof mediaType === "string" && mediaType.startsWith("image/")
+					? toConversationImageUrl(part.url ?? part.data, mediaType)
+					: null
+			if (url) {
+				return { type: "image_url", imageUrl: { url } }
+			}
+		}
+
+		if (part.type === "image") {
+			const mediaType =
+				typeof part.mediaType === "string" ? part.mediaType : "image/jpeg"
+			const url = toConversationImageUrl(part.image, mediaType)
+			if (url) return { type: "image_url", imageUrl: { url } }
+		}
+
+		if (part.type === "image_url") {
+			const imageUrl =
+				typeof part.imageUrl === "object" && part.imageUrl
+					? (part.imageUrl as { url?: unknown })
+					: typeof part.image_url === "object" && part.image_url
+						? (part.image_url as { url?: unknown })
+						: undefined
+			if (typeof imageUrl?.url === "string") {
+				return { type: "image_url", imageUrl: { url: imageUrl.url } }
+			}
+		}
+
+		return null
+	}
 
 	for (const msg of messages) {
 		if (msg.role === "system") {
 			continue
 		}
 
-		if (typeof msg.content === "string") {
-			if (msg.content) {
-				conversationMessages.push({
-					role: msg.role as "user" | "assistant" | "tool",
-					content: msg.content,
-				})
-			}
-		} else if (Array.isArray(msg.content)) {
-			const contentParts = msg.content
-				.map((c) => {
-					if (c.type === "text" && c.text) {
-						return {
-							type: "text" as const,
-							text: c.text,
-						}
-					}
-					// Handle image URLs if present
-					if (c.type === "image_url" && typeof c.image_url === "object") {
-						const imageUrl = c.image_url as { url?: string }
-						if (imageUrl.url) {
-							return {
-								type: "image_url" as const,
-								image_url: { url: imageUrl.url },
-							}
-						}
-					}
-					return null
-				})
+		const structuredParts = Array.isArray(msg.parts)
+			? msg.parts
+			: Array.isArray(msg.content)
+				? msg.content
+				: undefined
+
+		if (structuredParts) {
+			const contentParts = structuredParts
+				.map(convertPart)
 				.filter((part) => part !== null)
 
 			if (contentParts.length > 0) {
 				conversationMessages.push({
 					role: msg.role as "user" | "assistant" | "tool",
 					content: contentParts,
+				})
+			}
+		} else if (typeof msg.content === "string") {
+			const content = stripMemoryContext(msg.content)
+			if (content) {
+				conversationMessages.push({
+					role: msg.role as "user" | "assistant" | "tool",
+					content,
 				})
 			}
 		}
@@ -448,7 +447,7 @@ const convertToConversationMessages = (
 }
 
 /**
- * Saves conversation to Supermemory (fire-and-forget).
+ * Saves conversation to Supermemory.
  */
 export const saveConversation = async (
 	messages: VoltAgentMessage[],
@@ -467,18 +466,19 @@ export const saveConversation = async (
 		}
 
 		const response = await addConversation({
-			conversationId: ctx.customId,
+			id: ctx.id,
 			messages: conversationMessages,
-			containerTags: [ctx.containerTag],
+			namespace: ctx.namespace,
 			metadata: ctx.metadata,
-			entityContext: ctx.entityContext,
+			supportingContext: ctx.supportingContext,
 			apiKey: ctx.apiKey,
 			baseUrl: ctx.normalizedBaseUrl,
+			source: "tools-voltagent",
 		})
 
-		ctx.logger.info("Conversation saved successfully via /v4/conversations", {
-			containerTag: ctx.containerTag,
-			customId: ctx.customId,
+		ctx.logger.info("Conversation saved successfully", {
+			namespace: ctx.namespace,
+			id: ctx.id,
 			messageCount: conversationMessages.length,
 			responseId: response.id,
 			metadata: ctx.metadata,

@@ -1,15 +1,16 @@
-import Supermemory from "supermemory"
-import { getContainerTags } from "./tools-shared"
+import type { Supermemory } from "supermemory"
+import {
+	createToolsClient,
+	getNamespace,
+	isNotFoundError,
+} from "./tools-shared"
 import type { SupermemoryToolsConfig } from "./types"
 
-// Claude Memory Tool Types
-export interface ClaudeMemoryConfig extends SupermemoryToolsConfig {
-	memoryContainerTag?: string
-}
+export type ClaudeMemoryConfig = SupermemoryToolsConfig
 
-export interface MemoryCommand {
-	command: "view" | "create" | "str_replace" | "insert" | "delete" | "rename"
-	path: string
+export const CLAUDE_MEMORY_SOURCE = "claude-memory"
+
+interface MemoryCommandFields {
 	// view specific
 	view_range?: [number, number]
 	// create specific
@@ -20,9 +21,18 @@ export interface MemoryCommand {
 	// insert specific
 	insert_line?: number
 	insert_text?: string
-	// rename specific
+	// rename specific: Claude sends old_path/new_path (path is accepted too
+	// for backwards compatibility with earlier callers)
+	old_path?: string
 	new_path?: string
 }
+
+export type MemoryCommand =
+	| (MemoryCommandFields & {
+			command: "view" | "create" | "str_replace" | "insert" | "delete"
+			path: string
+	  })
+	| (MemoryCommandFields & { command: "rename"; path?: string })
 
 export interface MemoryResponse {
 	success: boolean
@@ -37,38 +47,36 @@ export interface MemoryToolResult {
 	is_error: boolean
 }
 
-/**
- * Claude Memory Tool - Client-side implementation
- * Maps Claude's memory tool commands to supermemory document operations
- */
+type ClaudeFileMetadata = Record<string, string | number | boolean | string[]>
+
+interface ClaudeFileDocument {
+	documentId: string
+	content: string
+	metadata: ClaudeFileMetadata
+}
+
+/** Maps Claude's memory tool commands to Supermemory documents in one namespace. */
 export class ClaudeMemoryTool {
 	private client: Supermemory
-	private containerTags: string[]
-	private memoryContainerPrefix: string
+	private namespace: string
 
-	/**
-	 * Normalize file path to be used as customId
-	 * Converts /memories/file.txt -> memories_file_txt
-	 */
-	private normalizePathToCustomId(path: string): string {
-		return path
-			.replace(/^\//, "") // Remove leading slash
-			.replace(/\//g, "_") // Replace / with _
-			.replace(/\./g, "_") // Replace . with _
+	/** Reversible encoding; the `cm_` prefix keeps it disjoint from legacy IDs, which always start with `memories`: /memories/a_b.txt -> cm_memories_s_a__b_d_txt */
+	private normalizePathToId(path: string): string {
+		return `cm_${path
+			.replace(/^\//, "")
+			.replace(/_/g, "__")
+			.replace(/\//g, "_s_")
+			.replace(/\./g, "_d_")}`
+	}
+
+	/** Pre-3.1.2 IDs, where / and . both became _ */
+	private legacyNormalizePathToId(path: string): string {
+		return path.replace(/^\//, "").replace(/\//g, "_").replace(/\./g, "_")
 	}
 
 	constructor(apiKey: string, config?: ClaudeMemoryConfig) {
-		this.client = new Supermemory({
-			apiKey,
-			...(config?.baseUrl && { baseURL: config.baseUrl }),
-		})
-
-		// Use custom memory container tag or default
-		this.memoryContainerPrefix = config?.memoryContainerTag || "claude_memory"
-
-		// Get base container tags and add memory-specific tag
-		const baseContainerTags = getContainerTags(config)
-		this.containerTags = [...baseContainerTags, this.memoryContainerPrefix]
+		this.client = createToolsClient(apiKey, config, "tools-claude-memory")
+		this.namespace = getNamespace(config)
 	}
 
 	/**
@@ -76,17 +84,24 @@ export class ClaudeMemoryTool {
 	 */
 	async handleCommand(command: MemoryCommand): Promise<MemoryResponse> {
 		try {
+			// rename is the one command that doesn't use `path`: Claude sends
+			// old_path/new_path. Fall back to `path` so older callers keep working.
+			const path =
+				command.command === "rename"
+					? (command.old_path ?? command.path)
+					: command.path
+
 			// Validate path security
-			if (!this.isValidPath(command.path)) {
+			if (path === undefined || !this.isValidPath(path)) {
 				return {
 					success: false,
-					error: `Invalid path: ${command.path}. All paths must start with /memories/`,
+					error: `Invalid path: ${path}. All paths must start with /memories/`,
 				}
 			}
 
 			switch (command.command) {
 				case "view":
-					return await this.view(command.path, command.view_range)
+					return await this.view(path, command.view_range)
 				case "create":
 					if (!command.file_text) {
 						return {
@@ -94,21 +109,22 @@ export class ClaudeMemoryTool {
 							error: "file_text is required for create command",
 						}
 					}
-					return await this.create(command.path, command.file_text)
+					return await this.create(path, command.file_text)
 				case "str_replace":
-					if (!command.old_str || !command.new_str) {
+					// new_str may be "" (deleting text) but must be present.
+					if (!command.old_str || command.new_str === undefined) {
 						return {
 							success: false,
 							error: "old_str and new_str are required for str_replace command",
 						}
 					}
-					return await this.strReplace(
-						command.path,
-						command.old_str,
-						command.new_str,
-					)
+					return await this.strReplace(path, command.old_str, command.new_str)
 				case "insert":
-					if (command.insert_line === undefined || !command.insert_text) {
+					// insert_text may be "" (inserting a blank line).
+					if (
+						command.insert_line === undefined ||
+						command.insert_text === undefined
+					) {
 						return {
 							success: false,
 							error:
@@ -116,12 +132,12 @@ export class ClaudeMemoryTool {
 						}
 					}
 					return await this.insert(
-						command.path,
+						path,
 						command.insert_line,
 						command.insert_text,
 					)
 				case "delete":
-					return await this.delete(command.path)
+					return await this.delete(path)
 				case "rename":
 					if (!command.new_path) {
 						return {
@@ -129,11 +145,11 @@ export class ClaudeMemoryTool {
 							error: "new_path is required for rename command",
 						}
 					}
-					return await this.rename(command.path, command.new_path)
+					return await this.rename(path, command.new_path)
 				default:
 					return {
 						success: false,
-						error: `Unknown command: ${(command as any).command}`,
+						error: `Unknown command: ${(command as { command: string }).command}`,
 					}
 			}
 		} catch (error) {
@@ -186,46 +202,48 @@ export class ClaudeMemoryTool {
 	 */
 	private async listDirectory(dirPath: string): Promise<MemoryResponse> {
 		try {
-			// Search for all memory files
-			const response = await this.client.search.execute({
-				q: "*", // Search for all
-				containerTags: this.containerTags,
-				limit: 100, // Get many files (max allowed)
-				includeFullDocs: false,
-			})
+			// Walk every page so files cannot disappear from a listing.
+			const filePaths: string[] = []
+			let page = 1
 
-			if (!response.results) {
-				return {
-					success: true,
-					content: `Directory: ${dirPath}\n(empty)`,
+			while (true) {
+				const response = await this.client.list(this.namespace, "documents", {
+					filter: {
+						operator: "and",
+						operands: [
+							{ field: "source", operator: "eq", value: CLAUDE_MEMORY_SOURCE },
+							{ field: "claude_memory_type", operator: "eq", value: "file" },
+							{ field: "file_path", operator: "contains", value: dirPath },
+						],
+					},
+					limit: 100,
+					page,
+				})
+
+				for (const document of response.documents) {
+					const filePath = this.getDocumentFilePath(document)
+					if (filePath?.startsWith(dirPath)) filePaths.push(filePath)
 				}
+
+				if (page >= response.pagination.totalPages) break
+				page += 1
 			}
 
-			// Filter files that match the directory path and extract relative paths
 			const files: string[] = []
 			const dirs = new Set<string>()
 
-			for (const result of response.results) {
-				// Get the file path from metadata (since customId is normalized)
-				const filePath = result.metadata?.file_path as string
-				if (!filePath || !filePath.startsWith(dirPath)) continue
-
-				// Get relative path from directory
+			for (const filePath of filePaths) {
 				const relativePath = filePath.substring(dirPath.length)
 				if (!relativePath) continue
 
-				// If path contains /, it's in a subdirectory
 				const slashIndex = relativePath.indexOf("/")
 				if (slashIndex > 0) {
-					// It's a subdirectory
 					dirs.add(`${relativePath.substring(0, slashIndex)}/`)
-				} else if (relativePath !== "") {
-					// It's a file in this directory
+				} else {
 					files.push(relativePath)
 				}
 			}
 
-			// Format directory listing
 			const entries = [...Array.from(dirs).sort(), ...files.sort()]
 
 			if (entries.length === 0) {
@@ -255,35 +273,31 @@ export class ClaudeMemoryTool {
 		viewRange?: [number, number],
 	): Promise<MemoryResponse> {
 		try {
-			const normalizedId = this.normalizePathToCustomId(filePath)
-
-			const response = await this.client.search.execute({
-				q: normalizedId,
-				containerTags: this.containerTags,
-				limit: 1,
-				includeFullDocs: true,
-			})
-
-			// Try to find exact match by customId
-			const exactMatch = response.results?.find(
-				(r) => r.documentId === normalizedId,
-			)
-			const document = exactMatch || response.results?.[0]
-
-			if (!document) {
+			// Resolve the exact document inside the configured scope so reads and
+			// mutations use the complete stored file, not one ranked search chunk.
+			const readResult = await this.getFileDocument(filePath)
+			if (!readResult.success || !readResult.document) {
 				return {
 					success: false,
-					error: `File not found: ${filePath}`,
+					error: readResult.error || `File not found: ${filePath}`,
 				}
 			}
 
-			let content = document.content || ""
+			const document = readResult.document
+
+			let content = document.content
 
 			// Apply line range if specified
 			if (viewRange) {
 				const lines = content.split("\n")
 				const [startLine, endLine] = viewRange
-				const selectedLines = lines.slice(startLine - 1, endLine)
+				// `endLine === -1` is the documented sentinel for "read to the end
+				// of the file" (same convention as Anthropic's text-editor tool).
+				// Passing it straight to Array.slice would be interpreted as a
+				// from-the-end index and silently drop the final line, so map any
+				// negative end to the array length.
+				const sliceEnd = endLine < 0 ? lines.length : endLine
+				const selectedLines = lines.slice(startLine - 1, sliceEnd)
 
 				// Format with line numbers
 				const numberedLines = selectedLines.map(
@@ -324,19 +338,15 @@ export class ClaudeMemoryTool {
 		fileText: string,
 	): Promise<MemoryResponse> {
 		try {
-			const normalizedId = this.normalizePathToCustomId(filePath)
-
-			const _response = await this.client.add({
-				content: fileText,
-				customId: normalizedId,
-				containerTags: this.containerTags,
-				metadata: {
-					claude_memory_type: "file",
-					file_path: filePath,
-					line_count: fileText.split("\n").length,
-					created_by: "claude_memory_tool",
-					last_modified: new Date().toISOString(),
-				},
+			const target = await this.resolveWriteId(filePath)
+			if ("error" in target) return { success: false, error: target.error }
+			await this.writeFile(target.id, fileText, {
+				source: CLAUDE_MEMORY_SOURCE,
+				claude_memory_type: "file",
+				file_path: filePath,
+				line_count: fileText.split("\n").length,
+				created_by: "claude_memory_tool",
+				last_modified: new Date().toISOString(),
 			})
 
 			return {
@@ -369,8 +379,7 @@ export class ClaudeMemoryTool {
 				}
 			}
 
-			const originalContent =
-				readResult.document.raw || readResult.document.content || ""
+			const originalContent = readResult.document.content
 
 			// Check if old_str exists in the content
 			if (!originalContent.includes(oldStr)) {
@@ -380,20 +389,15 @@ export class ClaudeMemoryTool {
 				}
 			}
 
-			// Replace the string
-			const newContent = originalContent.replace(oldStr, newStr)
+			// Replace the string. The function replacer keeps `$` sequences
+			// in the replacement literal — a bare string here would expand
+			// patterns like $&, $', and $` and silently corrupt the file.
+			const newContent = originalContent.replace(oldStr, () => newStr)
 
-			// Update the document
-			const normalizedId = this.normalizePathToCustomId(filePath)
-			const _updateResponse = await this.client.add({
-				content: newContent,
-				customId: normalizedId,
-				containerTags: this.containerTags,
-				metadata: {
-					...readResult.document.metadata,
-					line_count: newContent.split("\n").length,
-					last_modified: new Date().toISOString(),
-				},
+			await this.writeFile(readResult.document.documentId, newContent, {
+				...readResult.document.metadata,
+				line_count: newContent.split("\n").length,
+				last_modified: new Date().toISOString(),
 			})
 
 			return {
@@ -426,38 +430,30 @@ export class ClaudeMemoryTool {
 				}
 			}
 
-			const originalContent =
-				readResult.document.raw || readResult.document.content || ""
+			const originalContent = readResult.document.content
 			const lines = originalContent.split("\n")
 
-			// Validate line number
-			if (insertLine < 1 || insertLine > lines.length + 1) {
+			// insert_line is the line the text goes after: 0 means the beginning
+			// of the file and lines.length appends at the end.
+			if (insertLine < 0 || insertLine > lines.length) {
 				return {
 					success: false,
-					error: `Invalid line number: ${insertLine}. File has ${lines.length} lines.`,
+					error: `Invalid insert_line parameter: ${insertLine}. It should be within the range of lines of the file: [0, ${lines.length}]`,
 				}
 			}
 
-			// Insert the text (insertLine is 1-based)
-			lines.splice(insertLine - 1, 0, insertText)
+			lines.splice(insertLine, 0, insertText)
 			const newContent = lines.join("\n")
 
-			// Update the document
-			const normalizedId = this.normalizePathToCustomId(filePath)
-			await this.client.add({
-				content: newContent,
-				customId: normalizedId,
-				containerTags: this.containerTags,
-				metadata: {
-					...readResult.document.metadata,
-					line_count: newContent.split("\n").length,
-					last_modified: new Date().toISOString(),
-				},
+			await this.writeFile(readResult.document.documentId, newContent, {
+				...readResult.document.metadata,
+				line_count: newContent.split("\n").length,
+				last_modified: new Date().toISOString(),
 			})
 
 			return {
 				success: true,
-				content: `Text inserted at line ${insertLine} in file: ${filePath}`,
+				content: `Text inserted after line ${insertLine} in file: ${filePath}`,
 			}
 		} catch (error) {
 			return {
@@ -474,16 +470,16 @@ export class ClaudeMemoryTool {
 		try {
 			// Find the document first
 			const readResult = await this.getFileDocument(filePath)
-			if (!readResult.success || !readResult.document) {
+			const documentId =
+				readResult.document?.documentId ?? readResult.documentId
+			if (!documentId) {
 				return {
 					success: false,
 					error: readResult.error || "File not found",
 				}
 			}
 
-			// Delete using the document ID
-			// Note: We'll need to implement this based on supermemory's delete API
-			// For now, we'll return a success message
+			await this.deleteFile(documentId)
 
 			return {
 				success: true,
@@ -522,23 +518,19 @@ export class ClaudeMemoryTool {
 				}
 			}
 
-			const originalContent =
-				readResult.document.raw || readResult.document.content || ""
-			const newNormalizedId = this.normalizePathToCustomId(newPath)
+			// Overwrite the destination's existing document (possibly a legacy ID) so no stale copy survives.
+			const target = await this.resolveWriteId(newPath)
+			if ("error" in target) return { success: false, error: target.error }
 
-			// Create new document with new path
-			await this.client.add({
-				content: originalContent,
-				customId: newNormalizedId,
-				containerTags: this.containerTags,
-				metadata: {
-					...readResult.document.metadata,
-					file_path: newPath,
-					last_modified: new Date().toISOString(),
-				},
+			await this.writeFile(target.id, readResult.document.content, {
+				...readResult.document.metadata,
+				file_path: newPath,
+				last_modified: new Date().toISOString(),
 			})
 
-			// Delete the old document (would need proper delete API)
+			if (readResult.document.documentId !== target.id) {
+				await this.deleteFile(readResult.document.documentId)
+			}
 
 			return {
 				success: true,
@@ -552,40 +544,94 @@ export class ClaudeMemoryTool {
 		}
 	}
 
-	/**
-	 * Helper: Get document by file path
-	 */
+	// v5 `add` with an existing id appends; `update` replaces, so writes try update first.
+	private async writeFile(
+		id: string,
+		content: string,
+		metadata: ClaudeFileMetadata,
+	): Promise<void> {
+		try {
+			await this.client.documents.update(this.namespace, id, {
+				content,
+				metadata,
+			})
+		} catch (error) {
+			if (!isNotFoundError(error)) throw error
+			await this.client.add(this.namespace, { content, id, metadata })
+		}
+	}
+
+	private async deleteFile(id: string): Promise<void> {
+		const response = await this.client.documents.delete(this.namespace, {
+			ids: [id],
+		})
+		if (response.count === 1) return
+		const detail = response.errors?.find((error) => error.id === id)?.error
+		throw new Error(
+			detail
+				? `Failed to delete document ${id}: ${detail}`
+				: `Failed to delete document ${id}: expected one deletion, received ${response.count}`,
+		)
+	}
+
 	private async getFileDocument(filePath: string): Promise<{
 		success: boolean
-		document?: any
+		document?: ClaudeFileDocument
+		/** Set when the file exists, even if its content is still processing. */
+		documentId?: string
+		/** Only true for a confirmed 404, never for a failed lookup. */
+		notFound?: boolean
+		/** The file's own ID is held by a document that isn't this file. */
+		occupied?: boolean
 		error?: string
 	}> {
 		try {
-			const normalizedId = this.normalizePathToCustomId(filePath)
+			// Files written before 3.1.2 still live under the legacy ID.
+			const ids = [
+				this.normalizePathToId(filePath),
+				this.legacyNormalizePathToId(filePath),
+			]
+			let occupied = false
+			for (const id of ids) {
+				let document: Awaited<ReturnType<Supermemory["documents"]["get"]>>
+				try {
+					document = await this.client.documents.get(this.namespace, id)
+				} catch (error) {
+					if (isNotFoundError(error)) continue
+					throw error
+				}
 
-			const response = await this.client.search.execute({
-				q: normalizedId,
-				containerTags: this.containerTags,
-				limit: 5,
-				includeFullDocs: true,
-			})
+				// Different paths can share a legacy ID; only the exact file counts.
+				if (
+					document.metadata?.source !== CLAUDE_MEMORY_SOURCE ||
+					this.getDocumentFilePath(document) !== filePath
+				) {
+					if (id === ids[0]) occupied = true
+					continue
+				}
+				if (typeof document.content !== "string") {
+					return {
+						success: false,
+						documentId: id,
+						error: `File content unavailable: ${filePath}`,
+					}
+				}
 
-			// Try to find exact match by customId first
-			const exactMatch = response.results?.find(
-				(r) => r.documentId === normalizedId,
-			)
-			const document = exactMatch || response.results?.[0]
-
-			if (!document) {
 				return {
-					success: false,
-					error: `File not found: ${filePath}`,
+					success: true,
+					document: {
+						documentId: id,
+						content: document.content,
+						metadata: document.metadata as ClaudeFileMetadata,
+					},
 				}
 			}
 
 			return {
-				success: true,
-				document,
+				success: false,
+				notFound: true,
+				occupied,
+				error: `File not found: ${filePath}`,
 			}
 		} catch (error) {
 			return {
@@ -595,15 +641,49 @@ export class ClaudeMemoryTool {
 		}
 	}
 
+	/** The ID a write to filePath must use; errors rather than guessing when the lookup fails. */
+	private async resolveWriteId(
+		filePath: string,
+	): Promise<{ id: string } | { error: string }> {
+		const existing = await this.getFileDocument(filePath)
+		const existingId = existing.document?.documentId ?? existing.documentId
+		if (existingId) return { id: existingId }
+		if (!existing.notFound) {
+			return { error: existing.error ?? `Failed to look up ${filePath}` }
+		}
+		if (existing.occupied) {
+			return { error: `Another document already uses the ID for ${filePath}` }
+		}
+		return { id: this.normalizePathToId(filePath) }
+	}
+
+	private getDocumentFilePath(document: {
+		metadata: unknown
+	}): string | undefined {
+		const metadata = document.metadata
+		if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+			return undefined
+		}
+		const metadataRecord = metadata as Record<string, unknown>
+
+		return typeof metadataRecord.file_path === "string"
+			? metadataRecord.file_path
+			: undefined
+	}
+
 	/**
 	 * Validate that path starts with /memories for security
 	 */
 	private isValidPath(path: string): boolean {
-		return (
-			(path.startsWith("/memories/") || path === "/memories") &&
-			!path.includes("../") &&
-			!path.includes("..\\")
-		)
+		if (!(path.startsWith("/memories/") || path === "/memories")) {
+			return false
+		}
+		if (path.includes("..\\")) {
+			return false
+		}
+		// Reject any parent-directory segment, including trailing "/.." which
+		// the previous "../" substring check missed (e.g. "/memories/..").
+		return !path.split("/").some((segment) => segment === "..")
 	}
 }
 

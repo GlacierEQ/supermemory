@@ -1,0 +1,74 @@
+import { z } from "zod"
+import {
+	type DocumentWithMemories,
+	graphViewSchema,
+	type ViewMessage,
+} from "../../shared/types"
+import { appResultMeta, appToolMeta } from "../app-metadata"
+import { optionalNamespaceSchema } from "../namespace"
+import { legacyNamespaceInput, namespaceArg, withLegacyView } from "./compat"
+import { READ_ONLY_TOOL_ANNOTATIONS } from "./annotations"
+import { textContent, type ToolDeps } from "./types"
+
+const GRAPH_DOCUMENT_LIMIT = 200
+
+export function register(deps: ToolDeps) {
+	const inputSchema = z.object({
+		namespace: optionalNamespaceSchema,
+		...legacyNamespaceInput,
+	})
+
+	deps.server.registerTool(
+		"memory-graph",
+		{
+			title: "Memory Graph",
+			description:
+				"Render a space's memory graph directly as an interactive MCP App. This tool is the final visualization; do not create another graph, file, or artifact unless the user explicitly asks for one. If the user names a space, call list_spaces to resolve its key and pass it as namespace. If the user does not name a space, call this tool directly and omit namespace; the server uses the active space or account default. Do not open the space picker unless the user asks to change their active space.",
+			inputSchema,
+			outputSchema: graphViewSchema,
+			annotations: READ_ONLY_TOOL_ANNOTATIONS,
+			_meta: appToolMeta(),
+		},
+		async (args) => {
+			try {
+				const viewId = crypto.randomUUID()
+				const namespace = await deps.resolveNamespace(namespaceArg(args))
+				const client = deps.getClient(namespace)
+				const documents: DocumentWithMemories[] = []
+				let cursor: string | undefined
+				do {
+					const page = await client.getGraphDocuments(cursor)
+					documents.push(...page.documents)
+					cursor = page.nextCursor ?? undefined
+				} while (cursor && documents.length < GRAPH_DOCUMENT_LIMIT)
+				const memoryCount = documents.reduce(
+					(sum, document) => sum + document.memoryEntries.length,
+					0,
+				)
+				const sc: ViewMessage = withLegacyView({
+					view: "graph",
+					viewId,
+					namespace,
+					documents,
+					totalCount: documents.length,
+					documentCount: documents.length,
+					memoryCount,
+					totalDocumentCount: documents.length,
+					truncated: Boolean(cursor),
+					rendered: true,
+				})
+				return {
+					content: [
+						textContent(
+							`Rendered the interactive Memory Graph MCP App: ${documents.length} documents, ${memoryCount} memories. Space: ${namespace}. Do not create a duplicate graph or artifact unless the user explicitly requests one.`,
+						),
+					],
+					structuredContent: sc,
+					_meta: appResultMeta(viewId),
+				}
+			} catch (error) {
+				return deps.errorResult(error)
+			}
+		},
+	)
+}

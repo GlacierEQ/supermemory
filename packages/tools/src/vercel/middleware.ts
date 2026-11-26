@@ -1,30 +1,81 @@
-import Supermemory from "supermemory"
+import { LRUCache } from "lru-cache"
+import type { Supermemory } from "supermemory"
 import {
 	addConversation,
+	type ContentPart,
 	type ConversationMessage,
 } from "../conversations-client"
 import {
 	createLogger,
+	createSupermemoryClient,
 	normalizeBaseUrl,
-	MemoryCache,
 	buildMemoriesText,
+	defaultPromptTemplate,
+	supermemoryProfileSearch,
+	type ProfileStructure,
 	type Logger,
 	type PromptTemplate,
 	type MemoryMode,
 } from "../shared"
-import { type LanguageModelCallOptions, getLastUserMessage } from "./util"
-import { extractQueryText, injectMemoriesIntoParams } from "./memory-prompt"
+import { type LanguageModelCallOptions, imageFilePartUrl } from "./util"
+import {
+	extractQueryText,
+	injectMemoriesIntoParams,
+	injectTurnMemoriesIntoParams,
+	turnKey,
+} from "./memory-prompt"
 
-const convertToConversationMessages = (
+const safeJsonStringify = (value: unknown): string => {
+	try {
+		return JSON.stringify(value) ?? ""
+	} catch {
+		return ""
+	}
+}
+
+const serializeToolOutput = (output: unknown): string => {
+	if (typeof output === "string") return output
+	if (typeof output !== "object" || output === null) {
+		return safeJsonStringify(output)
+	}
+
+	const wrapper = output as {
+		type?: unknown
+		value?: unknown
+		reason?: unknown
+	}
+
+	if (
+		(wrapper.type === "text" || wrapper.type === "error-text") &&
+		typeof wrapper.value === "string"
+	) {
+		return wrapper.value
+	}
+	if (
+		wrapper.type === "json" ||
+		wrapper.type === "error-json" ||
+		wrapper.type === "content"
+	) {
+		return safeJsonStringify(wrapper.value)
+	}
+	if (wrapper.type === "execution-denied") {
+		return typeof wrapper.reason === "string" && wrapper.reason
+			? wrapper.reason
+			: "Tool execution denied"
+	}
+
+	return safeJsonStringify(output)
+}
+
+export const convertToConversationMessages = (
 	params: LanguageModelCallOptions,
 	assistantResponseText: string,
+	includeToolCalls = false,
 ): ConversationMessage[] => {
 	const messages: ConversationMessage[] = []
 
 	for (const msg of params.prompt) {
-		if (msg.role === "system") {
-			continue
-		}
+		if (msg.role === "system") continue
 
 		if (typeof msg.content === "string") {
 			if (msg.content) {
@@ -33,36 +84,63 @@ const convertToConversationMessages = (
 					content: msg.content,
 				})
 			}
-		} else {
-			const contentParts = msg.content
-				.map((c) => {
-					if (c.type === "text" && c.text) {
-						return {
-							type: "text" as const,
-							text: c.text,
-						}
-					}
-					if (
-						c.type === "file" &&
-						typeof c.data === "string" &&
-						c.mediaType.startsWith("image/")
-					) {
-						return {
-							type: "image_url" as const,
-							image_url: { url: c.data },
-						}
-					}
-					return null
-				})
-				.filter((part) => part !== null)
+			continue
+		}
 
-			if (contentParts.length > 0) {
+		let contentParts: ContentPart[] = []
+		let toolCalls: NonNullable<ConversationMessage["tool_calls"]> = []
+
+		// Flush any pending assistant/user content accumulated so far. Called
+		// before each tool-result so a tool result never jumps ahead of the
+		// text/tool-calls that preceded it (or behind text that follows it),
+		// preserving the original chronology for memory extraction.
+		const flushContent = () => {
+			if (contentParts.length > 0 || toolCalls.length > 0) {
 				messages.push({
 					role: msg.role as "user" | "assistant" | "tool",
-					content: contentParts,
+					content: contentParts.length > 0 ? contentParts : "",
+					...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+				})
+				contentParts = []
+				toolCalls = []
+			}
+		}
+
+		for (const content of msg.content) {
+			if (content.type === "text" && content.text) {
+				contentParts.push({
+					type: "text",
+					text: content.text,
+				})
+			} else if (content.type === "file") {
+				const url = imageFilePartUrl(content)
+				if (url) {
+					contentParts.push({ type: "image_url", imageUrl: { url } })
+				}
+			} else if (
+				includeToolCalls &&
+				content.type === "tool-call" &&
+				msg.role === "assistant"
+			) {
+				toolCalls.push({
+					id: content.toolCallId,
+					type: "function",
+					function: {
+						name: content.toolName,
+						arguments: safeJsonStringify(content.input) || "{}",
+					},
+				})
+			} else if (includeToolCalls && content.type === "tool-result") {
+				flushContent()
+				messages.push({
+					role: "tool",
+					content: serializeToolOutput(content.output),
+					tool_call_id: content.toolCallId,
 				})
 			}
 		}
+
+		flushContent()
 	}
 
 	if (assistantResponseText) {
@@ -77,31 +155,34 @@ const convertToConversationMessages = (
 
 export const saveMemoryAfterResponse = async (
 	_client: Supermemory,
-	containerTag: string,
-	customId: string,
+	namespace: string,
+	id: string,
 	assistantResponseText: string,
 	params: LanguageModelCallOptions,
 	logger: Logger,
 	apiKey: string,
 	baseUrl: string,
+	includeToolCalls = false,
 ): Promise<void> => {
 	try {
 		const conversationMessages = convertToConversationMessages(
 			params,
 			assistantResponseText,
+			includeToolCalls,
 		)
 
 		const response = await addConversation({
-			conversationId: customId,
+			id,
 			messages: conversationMessages,
-			containerTags: [containerTag],
+			namespace,
 			apiKey,
 			baseUrl,
+			source: "tools-ai-sdk",
 		})
 
-		logger.info("Conversation saved successfully via /v4/conversations", {
-			containerTag,
-			customId,
+		logger.info("Conversation saved successfully", {
+			namespace,
+			id,
 			messageCount: conversationMessages.length,
 			responseId: response.id,
 		})
@@ -116,12 +197,12 @@ export const saveMemoryAfterResponse = async (
  * Configuration options for the Supermemory middleware.
  */
 interface SupermemoryMiddlewareOptions {
-	/** Container tag/identifier for memory search (e.g., user ID, project ID) */
-	containerTag: string
+	/** Namespace for memory search (e.g., user ID, project ID) */
+	namespace: string
 	/** Supermemory API key */
 	apiKey: string
-	/** Custom ID to group messages into a single document. Required. */
-	customId: string
+	/** ID that groups messages into a single document. Required. */
+	id: string
 	/** Enable detailed logging of memory search and injection */
 	verbose?: boolean
 	/**
@@ -139,41 +220,55 @@ interface SupermemoryMiddlewareOptions {
 	addMemory?: "always" | "never"
 	/** Custom Supermemory API base URL */
 	baseUrl?: string
-	/** Custom function to format memory data into the system prompt */
+	/**
+	 * Persist assistant tool calls and tool results as part of the saved
+	 * conversation. Off by default: tool payloads are often large and
+	 * low-signal, and would pollute memory extraction.
+	 */
+	includeToolCalls?: boolean
 	promptTemplate?: PromptTemplate
-	/** Max wait (ms) for the pre-LLM `/v4/profile` retrieval. Omit for no limit (e.g. tests). `withSupermemory` sets this internally. */
+	/** Max wait (ms) for the pre-LLM profile retrieval. Omit for no limit (e.g. tests). `withSupermemory` sets this internally. */
 	memoryRetrievalTimeoutMs?: number
+}
+
+const MAX_TURNS = 500
+const EMPTY_PROFILE: ProfileStructure["profile"] = { static: [], dynamic: [] }
+
+interface TurnState {
+	memories: string
+	failure?: { error: unknown }
+	pending?: Promise<void>
 }
 
 interface SupermemoryMiddlewareContext {
 	client: Supermemory
 	logger: Logger
-	containerTag: string
-	customId: string
+	namespace: string
+	id: string
 	mode: MemoryMode
 	addMemory: "always" | "never"
+	includeToolCalls: boolean
 	normalizedBaseUrl: string
 	apiKey: string
 	promptTemplate?: PromptTemplate
 	memoryRetrievalTimeoutMs?: number
-	/**
-	 * Per-turn memory cache. Stores the injected memories string for each
-	 * user turn (keyed by turnKey) to avoid redundant API calls during tool-call
-	 */
-	memoryCache: MemoryCache<string>
+	profile?: { data: ProfileStructure["profile"]; text: string }
+	profileRequest?: Promise<ProfileStructure["profile"]>
+	turns: LRUCache<string, TurnState>
 }
 
 export const createSupermemoryContext = (
 	options: SupermemoryMiddlewareOptions,
 ): SupermemoryMiddlewareContext => {
 	const {
-		containerTag,
+		namespace,
 		apiKey,
-		customId,
+		id,
 		verbose = false,
 		mode = "profile",
 		addMemory = "always",
 		baseUrl,
+		includeToolCalls = false,
 		promptTemplate,
 		memoryRetrievalTimeoutMs,
 	} = options
@@ -181,120 +276,147 @@ export const createSupermemoryContext = (
 	const logger = createLogger(verbose)
 	const normalizedBaseUrl = normalizeBaseUrl(baseUrl)
 
-	const client = new Supermemory({
+	const client = createSupermemoryClient({
 		apiKey,
-		...(normalizedBaseUrl !== "https://api.supermemory.ai"
-			? { baseURL: normalizedBaseUrl }
-			: {}),
+		baseUrl: normalizedBaseUrl,
+		source: "tools-ai-sdk",
 	})
 
 	return {
 		client,
 		logger,
-		containerTag,
-		customId,
+		namespace,
+		id,
 		mode,
 		addMemory,
+		includeToolCalls,
 		normalizedBaseUrl,
 		apiKey,
 		promptTemplate,
 		...(memoryRetrievalTimeoutMs !== undefined
 			? { memoryRetrievalTimeoutMs }
 			: {}),
-		memoryCache: new MemoryCache<string>(),
+		turns: new LRUCache({ max: MAX_TURNS }),
 	}
 }
 
-/**
- * Generates a cache key for the current turn based on context and user message.
- * Uses the shared MemoryCache.makeTurnKey implementation.
- */
-const makeTurnKey = (
+// A failed fetch is dropped so the next user turn retries it instead of running without a profile for good.
+const loadProfile = (
 	ctx: SupermemoryMiddlewareContext,
-	userMessage: string,
-): string => {
-	return MemoryCache.makeTurnKey(
-		ctx.containerTag,
-		ctx.customId,
-		ctx.mode,
-		userMessage,
+	signal?: AbortSignal,
+): Promise<ProfileStructure["profile"]> => {
+	if (ctx.profile) return Promise.resolve(ctx.profile.data)
+	ctx.profileRequest ??= supermemoryProfileSearch(
+		ctx.namespace,
+		"",
+		ctx.normalizedBaseUrl,
+		ctx.apiKey,
+		"tools-ai-sdk",
+		signal,
 	)
+		.then(async ({ profile }) => {
+			const text = await buildMemoriesText({
+				namespace: ctx.namespace,
+				queryText: "",
+				mode: "profile",
+				baseUrl: ctx.normalizedBaseUrl,
+				apiKey: ctx.apiKey,
+				source: "tools-ai-sdk",
+				logger: ctx.logger,
+				promptTemplate: ctx.promptTemplate,
+				profile,
+			})
+			ctx.profile = { data: profile, text }
+			return profile
+		})
+		.finally(() => {
+			ctx.profileRequest = undefined
+		})
+	return ctx.profileRequest
 }
 
-/**
- * Checks if this is a new user turn (last message is from user)
- */
-const isNewUserTurn = (params: LanguageModelCallOptions): boolean => {
-	const lastMessage = params.prompt.at(-1)
-	return lastMessage?.role === "user"
+// Profile and search share one timeout; a failed profile never drops this turn's search results.
+const retrieveTurn = async (
+	ctx: SupermemoryMiddlewareContext,
+	query: string,
+): Promise<Omit<TurnState, "pending">> => {
+	const controller =
+		(ctx.memoryRetrievalTimeoutMs ?? 0) > 0 ? new AbortController() : undefined
+	const timeoutId = controller
+		? setTimeout(() => controller.abort(), ctx.memoryRetrievalTimeoutMs)
+		: undefined
+	const signal = controller?.signal
+	const profile = ctx.mode === "query" ? undefined : loadProfile(ctx, signal)
+	const template = ctx.promptTemplate ?? defaultPromptTemplate
+
+	try {
+		const [profileResult, searchResult] = await Promise.allSettled([
+			profile,
+			ctx.mode !== "profile" && query
+				? buildMemoriesText({
+						namespace: ctx.namespace,
+						queryText: query,
+						mode: ctx.mode,
+						baseUrl: ctx.normalizedBaseUrl,
+						apiKey: ctx.apiKey,
+						source: "tools-ai-sdk",
+						logger: ctx.logger,
+						promptTemplate: (data) => template({ ...data, userMemories: "" }),
+						...(signal && { signal }),
+						...(profile && { profile: profile.catch(() => EMPTY_PROFILE) }),
+					})
+				: "",
+		])
+		const memories =
+			searchResult.status === "fulfilled" ? searchResult.value : ""
+		const failed = [profileResult, searchResult].find(
+			(result): result is PromiseRejectedResult => result.status === "rejected",
+		)
+		return { memories, ...(failed && { failure: { error: failed.reason } }) }
+	} finally {
+		if (timeoutId !== undefined) clearTimeout(timeoutId)
+	}
 }
 
+export const injectCachedMemories = (
+	params: LanguageModelCallOptions,
+	ctx: SupermemoryMiddlewareContext,
+): LanguageModelCallOptions =>
+	injectMemoriesIntoParams(
+		injectTurnMemoriesIntoParams(
+			params,
+			(key) => ctx.turns.get(key)?.memories ?? "",
+		),
+		ctx.profile?.text ?? "",
+		ctx.logger,
+	)
+
+// Tool steps reuse their turn as is; only a new or regenerated user turn retries a failed retrieval.
 export const transformParamsWithMemory = async (
 	params: LanguageModelCallOptions,
 	ctx: SupermemoryMiddlewareContext,
 ): Promise<LanguageModelCallOptions> => {
-	const userMessage = getLastUserMessage(params)
-
-	if (ctx.mode !== "profile") {
-		if (!userMessage) {
-			ctx.logger.debug("No user message found, skipping memory search")
-			return params
+	const users = params.prompt.filter((message) => message.role === "user")
+	const user = users.at(-1)
+	if (user) {
+		const query = extractQueryText({ ...params, prompt: [user] }, "query")
+		const key = turnKey(users.length - 1, query)
+		const fresh = params.prompt.at(-1)?.role === "user"
+		let turn = ctx.turns.get(key)
+		if (!turn || (fresh && turn.failure && !turn.pending)) {
+			const next: TurnState = { memories: turn?.memories ?? "" }
+			next.pending = retrieveTurn(ctx, query).then((result) => {
+				next.memories = result.memories
+				next.failure = result.failure
+				next.pending = undefined
+			})
+			ctx.turns.set(key, next)
+			turn = next
 		}
+		await turn.pending
+		if (turn.failure) throw turn.failure.error
 	}
-
-	const turnKey = makeTurnKey(ctx, userMessage || "")
-	const isNewTurn = isNewUserTurn(params)
-
-	// Check if we can use cached memories
-	const cachedMemories = ctx.memoryCache.get(turnKey)
-	if (!isNewTurn && cachedMemories) {
-		ctx.logger.debug("Using cached memories: ", {
-			turnKey,
-		})
-		return injectMemoriesIntoParams(params, cachedMemories, ctx.logger)
-	}
-
-	ctx.logger.info("Starting memory search", {
-		containerTag: ctx.containerTag,
-		customId: ctx.customId,
-		mode: ctx.mode,
-		isNewTurn,
-		cacheHit: false,
-	})
-
-	const queryText = extractQueryText(params, ctx.mode)
-
-	let fetchSignal: AbortSignal | undefined
-	let timeoutId: ReturnType<typeof setTimeout> | undefined
-	const timeoutMs = ctx.memoryRetrievalTimeoutMs
-	if (timeoutMs !== undefined && timeoutMs > 0) {
-		const controller = new AbortController()
-		fetchSignal = controller.signal
-		timeoutId = setTimeout(() => controller.abort(), timeoutMs)
-	}
-
-	let memories: string
-	try {
-		memories = await buildMemoriesText({
-			containerTag: ctx.containerTag,
-			queryText,
-			mode: ctx.mode,
-			baseUrl: ctx.normalizedBaseUrl,
-			apiKey: ctx.apiKey,
-			logger: ctx.logger,
-			promptTemplate: ctx.promptTemplate,
-			...(fetchSignal ? { signal: fetchSignal } : {}),
-		})
-	} finally {
-		if (timeoutId !== undefined) {
-			clearTimeout(timeoutId)
-		}
-	}
-
-	ctx.memoryCache.set(turnKey, memories)
-	ctx.logger.debug("Cached memories for turn", { turnKey })
-
-	return injectMemoriesIntoParams(params, memories, ctx.logger)
+	return injectCachedMemories(params, ctx)
 }
 
 export const extractAssistantResponseText = (content: unknown[]): string => {

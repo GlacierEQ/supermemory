@@ -1,0 +1,160 @@
+---
+title: "Self-hosting configuration"
+sidebarTitle: "Configuration"
+description: "Every environment variable the self-hosted server understands."
+icon: "/icons/hugeicons/settings-01.svg"
+---
+
+The self-hosted server aims for **zero configuration** — the only required input is one LLM provider key, which the first-boot wizard collects interactively (or set via env var for non-interactive deployments). Embeddings default to local English; you can pick another provider in the optional wizard step or via env. Everything else below is opt-in.
+
+The installer writes API keys to `~/.supermemory/env`, and the first-boot wizard saves them encrypted to `env.enc` in the data directory. Saved keys are loaded on every launch. When the data directory is `~/.supermemory`, the server copies the installer's parsed plaintext `env` values into `env.enc` on the next launch before attempting to remove `env`. A failed migration or removal can leave the plaintext file in place. You can also set variables in your shell or a process manager.
+
+## Core
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `PORT` (or `SUPERMEMORY_PORT`) | HTTP listen port | `6767` |
+| `SUPERMEMORY_HOST` | Listen address (v0.0.9 and later). Set `0.0.0.0` only when you protect the server with TLS and firewall rules | `127.0.0.1` |
+| `SUPERMEMORY_DATA_DIR` | Where the graph engine's data, auth secret, and model cache live | `~/.supermemory` |
+
+From v0.0.9, an unset `SUPERMEMORY_DATA_DIR` uses `~/.supermemory`. An existing `./.supermemory` store in the current directory is still used if `~/.supermemory` has none. If both have a store, the server refuses to start until you set `SUPERMEMORY_DATA_DIR`. v0.0.8 and older always use `./.supermemory`.
+
+From v0.0.9, the server binds `127.0.0.1` and every API request needs the generated key, including requests from localhost. The welcome page does not show the key; enter the key printed at first boot in the Memory tab. If you expose the server through a reverse proxy, protect it with TLS and access controls. **v0.0.8 and older bind all interfaces with implicit local authentication. Do not expose them; upgrade, or restrict access with a firewall.**
+
+## LLM providers
+
+In production, Supermemory uses its own proprietary models tuned for long-horizon data understanding. Self-hosted, you bring your own LLM for the intelligent steps — summaries, contextual chunking, and memory extraction. Embeddings default to a local model (no API key) and can optionally use OpenAI, Gemini, or Ollama — see [Embeddings](/self-hosting/embeddings). Configure **at least one** LLM provider:
+
+| Variable | Provider |
+|---|---|
+| `OPENAI_API_KEY` | OpenAI — or any OpenAI-compatible endpoint, see below |
+| `ANTHROPIC_API_KEY` | Anthropic |
+| `GEMINI_API_KEY` | Google AI Studio (Gemini) |
+| `GOOGLE_VERTEX_PROJECT_ID` + `GOOGLE_VERTEX_LOCATION` | GCP Vertex AI |
+| `GROQ_API_KEY` | Groq |
+| `WORKERS_AI_API_KEY` + `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Workers AI |
+
+<Tip>
+No key set? The server walks you through it. On first boot, an interactive setup wizard asks which provider you want, securely prompts for the key, and saves it encrypted — including a custom base URL and model name if you pick an OpenAI-compatible endpoint.
+</Tip>
+
+For fast/text LLM tasks, the first configured provider in the order above is used. Image and video tasks use Vertex AI first, then Gemini.
+
+<Note>
+Image and video understanding require a Gemini or Vertex AI key. PDF extraction requires `GEMINI_API_KEY`; Vertex AI doesn't cover it. Text ingestion, memory extraction, and search work with any provider.
+
+Webpage ingestion fetches pages through Firecrawl and needs `FIRECRAWL_API_KEY`. Without it, webpage documents fail. URLs pointing to PDFs or media use their corresponding extractors instead.
+</Note>
+
+### Fully offline with local models
+
+`OPENAI_API_KEY` + `OPENAI_BASE_URL` covers any OpenAI-compatible endpoint: Ollama, LM Studio, vLLM, llama.cpp server, Together, Fireworks, and more.
+
+```bash
+# Ollama example — gpt-oss-20b works great
+OPENAI_BASE_URL=http://localhost:11434/v1
+OPENAI_API_KEY=ollama        # any non-empty string for local runners
+OPENAI_MODEL=gpt-oss:20b
+```
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `OPENAI_BASE_URL` | OpenAI-compatible endpoint URL | OpenAI |
+| `OPENAI_MODEL` | Model ID sent to that endpoint | `gpt-5.1` |
+| `OPENAI_FAST_MODEL` | Override for fast/light tasks | `OPENAI_MODEL` |
+| `OPENAI_TEXT_MODEL` | Override for heavier text tasks | `OPENAI_MODEL` |
+
+## Storage & persistence
+
+### File storage
+
+Uploaded files (PDFs, images) are stored on local disk inside `$SUPERMEMORY_DATA_DIR` and served by the server at `/files/:key`.
+
+### Database snapshots & resource usage
+
+The server saves its database and vector indices as one encrypted snapshot file at `$SUPERMEMORY_DATA_DIR/data`.
+
+- **Idle (v0.0.7 and later):** if nothing changed since the last snapshot, the server skips it, so an idle server does no snapshot work.
+- **While writing:** each snapshot is a full dump, taken every 10 seconds while writes continue. The interval is not configurable.
+- **Shutdown:** on `SIGINT` or `SIGTERM`, pending changes are saved before the process exits.
+
+
+## Embeddings
+
+By default, vectors are computed locally with `Xenova/bge-base-en-v1.5` (768d) — no embedding API key. On interactive first boot you can pick a different provider after the LLM key step; for Docker/CI set env vars instead.
+
+The `SUPERMEMORY_EMBEDDING_*` env vars, the local model table, remote examples (OpenAI, Gemini, Ollama) and the dimension lock are in [embeddings for self-hosting](/self-hosting/embeddings).
+
+### Embedding performance
+
+Local embeddings are prewarmed at startup with conservative defaults — one worker, minimal CPU footprint. Turn these up if you're ingesting heavily and prefer throughput over headroom (remote embedding providers ignore these — there's no local worker pool to tune):
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `SUPERMEMORY_LOCAL_EMBEDDING_POOL_SIZE` | Number of embedding workers | `1` |
+| `SUPERMEMORY_LOCAL_EMBEDDING_WASM_THREADS` | Compute threads per worker | `1` |
+| `SUPERMEMORY_LOCAL_EMBEDDING_BATCH_SIZE` | Texts per worker dispatch | `8` |
+| `SUPERMEMORY_LOCAL_EMBEDDING_IDLE_TIMEOUT_MS` | Idle time before workers shut down | `120000` |
+| `SUPERMEMORY_SKIP_EMBEDDING_PREWARM` | Skip startup prewarm, load on first use | unset |
+
+## Memory limits & ingestion queue
+
+The server manages memory for you and separates the two kinds of work you send it:
+
+- **Searches are always served immediately.** They never wait behind ingestion, regardless of how much is queued.
+- **Adds are accepted instantly but processed through a queue.** A `POST /ns/{namespace}/document` call returns in milliseconds with status `queued`; extraction, embedding, and indexing happen in the background at a controlled pace.
+
+Ingestion may grow the server's memory usage by at most `SUPERMEMORY_EMBEDDING_RAM_LIMIT` (default **1 GB**) above its post-boot baseline. Past that, new documents simply wait in the queue until memory drops back under the limit — nothing is dropped, ingestion just slows down. The limit is measured above the boot baseline because the built-in local embeddings and storage engine have a fixed footprint that exists before any document is processed.
+
+The limit is printed at boot, and whenever adds are waiting the binary shows a live status line in the terminal:
+
+```
+[ingest] memory limit 1.0 GB above baseline (1.6 GB) · 2 concurrent — set SUPERMEMORY_EMBEDDING_RAM_LIMIT=ngb to change
+[ingest] 2 running · 193 queued · 0.4 GB / 1.0 GB ingest memory
+[ingest] 2 running · 193 queued · paused — 1.1 GB / 1.0 GB ingest memory, waiting for it to drop
+[ingest] resumed — memory back under the 1.0 GB ingest limit
+```
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `SUPERMEMORY_EMBEDDING_RAM_LIMIT` | Memory ingestion may use above the boot baseline. Accepts `1gb`, `1.5gb`, `512mb`, or a bare number (GB). | `1gb` |
+| `SUPERMEMORY_INGEST_CONCURRENCY` | Documents processed concurrently | `2` |
+
+```bash
+# Give ingestion 4 GB of headroom on a larger machine
+SUPERMEMORY_EMBEDDING_RAM_LIMIT=4gb ./supermemory-server
+```
+
+Raise the limit and concurrency on machines with spare RAM for faster bulk imports; lower them on small VPSes where you want the server to stay lean and don't mind adds draining slowly.
+
+## Telemetry
+
+Supermemory collects telemetry. You can disable it with `SUPERMEMORY_DISABLE_TELEMETRY=1`.
+
+## Platform-only features
+
+These exist in the codebase but are exclusive to the [hosted platform](https://console.supermemory.ai) — the self-hosted binary doesn't include them:
+
+- **Connectors** — Google Drive, Notion, Gmail, OneDrive background sync
+- **Supermemory MCP** — managed MCP server endpoints
+- **Optimized memory extraction** — the platform's extraction pipeline is tuned for higher quality at lower cost than bring-your-own-key
+- **Managed scale** — globally distributed infrastructure, no capacity planning
+
+Besides the variables on this page, the binary honors a few operational switches: `SUPERMEMORY_VERBOSE=1` (detailed logs), `SUPERMEMORY_HIDE_API_KEY_IN_LOGS=1` (omit the key from the startup banner), `SUPERMEMORY_NO_OPEN=1` (don't open a browser on boot), and `SUPERMEMORY_NO_UPDATE_CHECK=1` (skip the update notification). The Docker image sets the last three.
+
+## Example: production-ish `.env`
+
+```dotenv
+# Persistent data location
+SUPERMEMORY_DATA_DIR=/var/lib/supermemory
+
+# One LLM provider (required for extraction)
+OPENAI_API_KEY=sk-...
+
+# Optional — omit to keep local Xenova/bge-base-en-v1.5 (768d)
+# SUPERMEMORY_EMBEDDING_PROVIDER=openai
+# SUPERMEMORY_EMBEDDING_MODEL=text-embedding-3-small
+# SUPERMEMORY_EMBEDDING_DIMENSIONS=1536
+```
+
+That's enough for full ingestion, memory extraction, and hybrid search with the default local embeddings.

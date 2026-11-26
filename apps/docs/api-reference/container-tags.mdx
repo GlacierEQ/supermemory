@@ -1,0 +1,23 @@
+---
+title: "Container tags"
+sidebarTitle: "Overview"
+description: "Settings, merge and delete for multi-tenant containers."
+icon: "/icons/hugeicons/book-open-01.svg"
+---
+
+<Note>
+v5 calls these **namespaces**. Same values. New integrations should use [v5 namespaces](/v5/api-reference/namespaces).
+</Note>
+
+`containerTag` is the primary multi-tenant key (user id, workspace id, etc.). These endpoints manage settings and lifecycle for a tag.
+
+| Endpoint | Use when |
+| --- | --- |
+| `GET /v3/container-tags/list` | List every container tag |
+| `GET /v3/container-tags/{containerTag}` | Read tag settings |
+| `PATCH /v3/container-tags/{containerTag}` | Update tag settings |
+| `DELETE /v3/container-tags/{containerTag}` | Delete a container and its data |
+| `POST /v3/container-tags/merge` | Merge exactly two listed tags into either listed tag or a new target tag |
+| `GET /v3/container-tags/merge/{mergeId}` | Poll merge status |
+
+**Guide:** [Container tags](/concepts/container-tags) · [Filtering](/concepts/filtering)

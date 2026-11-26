@@ -33,11 +33,12 @@ interface AgentConfig {
  * Supermemory processors injected. Use this before creating your Agent instance.
  *
  * The enhanced config includes:
- * - Input processor: Fetches relevant memories before LLM calls
+ * - Input processor: Fetches memories before LLM calls; the profile goes in the system messages and
+ *   search results on the user message they were retrieved for
  * - Output processor: Saves conversations after responses (when addMemory is "always")
  *
  * @param config - The Mastra agent configuration to enhance
- * @param options - Configuration options including required containerTag and customId
+ * @param options - Configuration options including required namespace and id
  * @returns Enhanced agent config with Supermemory processors injected
  *
  * @example
@@ -54,8 +55,8 @@ interface AgentConfig {
  *     instructions: "You are a helpful assistant.",
  *   },
  *   {
- *     containerTag: "user-123",
- *     customId: "conv-456",
+ *     namespace: "user-123",
+ *     id: "conv-456",
  *     mode: "full",
  *     addMemory: "always",
  *   }
@@ -74,11 +75,11 @@ export function withSupermemory<T extends AgentConfig>(
 	if (
 		typeof options !== "object" ||
 		options === null ||
-		!options.containerTag ||
-		!options.customId
+		!options.namespace ||
+		!options.id
 	) {
 		throw new Error(
-			"withSupermemory: options must be an object with required containerTag and customId fields. " +
+			"withSupermemory: options must be an object with required namespace and id fields. " +
 				"The API changed in v2.0.0 — see https://docs.supermemory.ai/integrations/mastra for the new signature.",
 		)
 	}

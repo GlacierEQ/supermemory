@@ -24,7 +24,7 @@ npm install supermemory
 ```bash
 pip install supermemory
 # Or for async support with aiohttp
-pip install supermemory[aiohttp]
+pip install 'supermemory[aiohttp]'
 ```
 
 📦 View on PyPI: [https://pypi.org/project/supermemory/](https://pypi.org/project/supermemory/)
@@ -249,7 +249,7 @@ await client.add({
 });
 
 // Search documents (use hybrid mode for RAG)
-const response = await client.search.memories({
+const response = await client.search({
   q: "How do I authenticate?",
   containerTag: "knowledge_base",
   searchMode: "hybrid",

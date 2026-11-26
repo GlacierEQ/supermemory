@@ -4,11 +4,14 @@ Provides FunctionTool-compatible tools that can be passed to Agent.run(tools=[..
 """
 
 import json
-from typing import Annotated, Any, TypedDict
+import warnings
+from typing import Annotated, Any, Optional, TypedDict
 
 from agent_framework import FunctionTool, tool
+from supermemory.types import SearchResponse
 
 from .connection import AgentSupermemory
+from .utils import _fetch_profile_and_search
 
 
 class MemorySearchResult(TypedDict, total=False):
@@ -35,6 +38,42 @@ class ProfileResult(TypedDict, total=False):
     profile: dict[str, Any] | None
     search_results: dict[str, Any] | None
     error: str | None
+
+
+def _to_jsonable(value: Any) -> Any:
+    """Convert generated SDK models into JSON-compatible structures."""
+    if isinstance(value, dict):
+        return {key: _to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_jsonable(item) for item in value]
+
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return _to_jsonable(model_dump(mode="json"))
+        except TypeError:
+            return _to_jsonable(model_dump())
+
+    return value
+
+
+def _serialize_search_results(response: SearchResponse) -> dict[str, Any]:
+    """Keep the tool's legacy result fields while retaining v5 metadata."""
+    results = [
+        {
+            "chunks": None,
+            "context": None,
+            "documents": None,
+            "filepath": None,
+            "is_aggregated": None,
+            "root_memory_id": None,
+            "version": None,
+            **_to_jsonable(item),
+            "updated_at": item.system.updated_at,
+        }
+        for item in response.results
+    ]
+    return {"results": results, "timing": response.search_time, "total": len(results)}
 
 
 class SupermemoryTools:
@@ -64,27 +103,37 @@ class SupermemoryTools:
     async def search_memories(
         self,
         information_to_get: Annotated[
-            str, "Terms to search for in the user's memories"
+            str, "Terms to search for in stored memories and source content"
         ],
-        include_full_docs: Annotated[
-            bool,
-            "Whether to include full document content. Defaults to true for better AI context.",
-        ] = True,
+        include_full_docs: Optional[bool] = None,
         limit: Annotated[int, "Maximum number of results to return"] = 10,
     ) -> str:
-        """Search (recall) memories/details/information about the user or other facts or entities. Run when explicitly asked or when context about user's past choices would be helpful."""
-        try:
-            response = await self._client.search.execute(
-                q=information_to_get,
-                container_tags=[self._connection.container_tag],
-                limit=limit,
-                chunk_threshold=0.6,
-                include_full_docs=include_full_docs,
+        """Search stored memories and source chunks.
+
+        ``include_full_docs`` remains a deprecated Python-only argument for
+        source compatibility. This tool does not return full source documents.
+        """
+        if include_full_docs is not None:
+            warnings.warn(
+                "include_full_docs is deprecated and ignored; search_memories "
+                "does not request full source documents",
+                DeprecationWarning,
+                stacklevel=2,
             )
+
+        try:
+            response = await self._client.search(
+                self._connection.container_tag,
+                query=information_to_get,
+                limit=limit,
+                threshold=0.6,
+                search_mode="hybrid",
+            )
+            results = _serialize_search_results(response)["results"]
             result: MemorySearchResult = {
                 "success": True,
-                "results": response.results,
-                "count": len(response.results) if response.results else 0,
+                "results": results,
+                "count": len(results),
             }
             return json.dumps(result, default=str)
         except Exception as error:
@@ -101,13 +150,13 @@ class SupermemoryTools:
         """Add (remember) memories/details/information about the user or other facts or entities. Run when explicitly asked or when the user mentions any information generalizable beyond the context of the current conversation."""
         try:
             response = await self._client.add(
+                self._connection.container_tag,
                 content=memory,
-                container_tag=self._connection.container_tag,
-                custom_id=self._connection.custom_id,
+                id=self._connection.custom_id,
             )
             result: MemoryAddResult = {
                 "success": True,
-                "memory": response,
+                "memory": _to_jsonable(response),
             }
             return json.dumps(result, default=str)
         except Exception as error:
@@ -123,19 +172,24 @@ class SupermemoryTools:
     ) -> str:
         """Get user profile containing static memories (permanent facts) and dynamic memories (recent context). Optionally include search results by providing a query."""
         try:
-            kwargs: dict[str, Any] = {"container_tag": self._connection.container_tag}
-            if query:
-                kwargs["q"] = query
-
-            response = await self._client.profile(**kwargs)
+            response, search = await _fetch_profile_and_search(
+                self._client, self._connection.container_tag, query=query
+            )
             result: dict[str, Any] = {
                 "success": True,
-                "profile": response.profile if hasattr(response, "profile") else None,
-                "search_results": (
-                    response.search_results
-                    if hasattr(response, "search_results")
+                "profile": (
+                    {
+                        "static": [fact.memory for fact in response.profile.static],
+                        "dynamic": [fact.memory for fact in response.profile.dynamic],
+                        "buckets": {
+                            name: [fact.memory for fact in facts]
+                            for name, facts in response.profile.buckets.items()
+                        },
+                    }
+                    if response
                     else None
                 ),
+                "search_results": _serialize_search_results(search) if search else None,
             }
             return json.dumps(result, default=str)
         except Exception as error:
@@ -152,11 +206,11 @@ class SupermemoryTools:
             tool(
                 name="search_memories",
                 description=(
-                    "Search (recall) memories/details/information about the user or other "
-                    "facts or entities. Run when explicitly asked or when context about "
-                    "user's past choices would be helpful."
+                    "Search stored memories and source chunks for relevant facts, preferences, "
+                    "history, and context. Use proactively whenever prior context could help; "
+                    "hybrid results can contain either a memory or a source chunk."
                 ),
-            )(self.search_memories),
+            )(self._search_memories_tool),
             tool(
                 name="add_memory",
                 description=(
@@ -174,3 +228,16 @@ class SupermemoryTools:
                 ),
             )(self.get_profile),
         ]
+
+    async def _search_memories_tool(
+        self,
+        information_to_get: Annotated[
+            str, "Terms to search for in stored memories and source content"
+        ],
+        limit: Annotated[int, "Maximum number of results to return"] = 10,
+    ) -> str:
+        """Model-facing search wrapper that omits deprecated arguments."""
+        return await self.search_memories(
+            information_to_get=information_to_get,
+            limit=limit,
+        )

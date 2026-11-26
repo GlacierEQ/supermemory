@@ -35,21 +35,29 @@ export type { RequestContext } from "@mastra/core/request-context"
  * Configuration options for the Supermemory Mastra processor.
  */
 export interface SupermemoryMastraOptions {
-	/** Container tag/user ID for scoping memories. Required. */
-	containerTag: string
-	/** Custom ID to group messages into a single document for contextual memory generation. Required. */
-	customId: string
+	/** Namespace (e.g. user ID) for scoping memories. Required. */
+	namespace: string
+	/** ID that groups messages into a single document for contextual memory generation. Required. */
+	id: string
 	/** Supermemory API key (falls back to SUPERMEMORY_API_KEY env var) */
 	apiKey?: string
 	/** Custom Supermemory API base URL */
 	baseUrl?: string
-	/** Memory retrieval mode */
+	/**
+	 * Memory retrieval mode (default: "profile"):
+	 * - "profile": The user profile, fetched once per conversation, added to the system messages
+	 * - "query": Search results for each user message, appended to that message
+	 * - "full": Both: the profile once in the system messages, plus per-message search results
+	 *
+	 * The profile stays byte-identical on every call and earlier messages keep the block they
+	 * first received. A failed or timed-out fetch is retried on the next user message.
+	 */
 	mode?: MemoryMode
 	/** Memory persistence mode (default: "always") */
 	addMemory?: AddMemoryMode
 	/** Enable detailed logging of memory search and injection */
 	verbose?: boolean
-	/** Custom function to format memory data into the system prompt */
+	/** Custom function to format the profile block and each search block; see {@link PromptTemplate} */
 	promptTemplate?: PromptTemplate
 }
 

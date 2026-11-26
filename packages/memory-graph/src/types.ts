@@ -1,46 +1,20 @@
 // Graph API types matching backend response
 
-import type { MemoryRelation } from "./api-types"
+import type {
+	GraphApiDocument,
+	GraphApiMemory,
+	MemoryRelation,
+} from "./api-types"
 
-export interface GraphApiMemory {
-	id: string
-	memory: string
-	content?: string | null
-	isStatic: boolean
-	spaceId: string
-	isLatest: boolean
-	isForgotten: boolean
-	forgetAfter: string | null
-	forgetReason: string | null
-	version: number
-	parentMemoryId: string | null
-	rootMemoryId: string | null
-	createdAt: string
-	updatedAt: string
-	// Relation fields from backend
-	relation?: MemoryRelation | null
-	updatesMemoryId?: string | null
-	nextVersionId?: string | null
-	memoryRelations?: Record<string, MemoryRelation> | null
-	// Source/join fields
-	spaceContainerTag?: string | null
-}
-
-export interface GraphApiDocument {
-	id: string
-	title: string | null
-	summary: string | null
-	documentType: string
-	createdAt: string
-	updatedAt: string
-	memories: GraphApiMemory[]
-}
+export type { GraphApiDocument, GraphApiMemory }
 
 export interface GraphApiEdge {
 	source: string
 	target: string
 	edgeType: MemoryRelation
 }
+
+export type GraphEdgeType = MemoryRelation | "document"
 
 // Typed node data
 
@@ -81,6 +55,8 @@ export interface GraphNode {
 	data: DocumentNodeData | MemoryNodeData
 	size: number
 	borderColor: string
+	clusterKey?: string | null
+	clusterColor?: string | null
 	isHovered: boolean
 	isDragging: boolean
 	// D3-force simulation properties
@@ -98,11 +74,12 @@ export interface GraphEdge {
 		opacity: number
 		thickness: number
 	}
-	edgeType: MemoryRelation
+	edgeType: GraphEdgeType
 }
 
 export interface GraphThemeColors {
 	bg: string
+	dotColor?: string
 	docFill: string
 	docStroke: string
 	docInnerFill: string
@@ -113,6 +90,7 @@ export interface GraphThemeColors {
 	textPrimary: string
 	textSecondary: string
 	textMuted: string
+	edgeDocument?: string
 	edgeDerives: string
 	edgeUpdates: string
 	edgeExtends: string
@@ -130,12 +108,40 @@ export interface GraphThemeColors {
 	controlBorder: string
 }
 
+export interface MemoryGraphLabels {
+	documentGroup?: string
+	documentTypeFallback?: string
+	documentSourceEdge?: string
+	documentToMemoryEdge?: string
+	memoryCount?: (count: number) => string
+	documentIdLabel?: string
+	viewDocument?: string
+	goToDocument?: string
+	nextDocument?: string
+	previousDocument?: string
+	showMemory?: string
+	loadingMoreDocuments?: (count: number) => string
+	emptyGraph?: string
+}
+
+export type ResolvedMemoryGraphLabels = Required<MemoryGraphLabels>
+
+export interface MemoryGraphLayering {
+	hoverPopoverZIndex?: number
+}
+
+export interface GraphAppearance {
+	documentNodes?: "icons" | "stacked"
+	connections?: "default" | "emphasized"
+}
+
 export interface GraphCanvasProps {
 	nodes: GraphNode[]
 	edges: GraphEdge[]
 	width: number
 	height: number
 	colors: GraphThemeColors
+	appearance?: GraphAppearance
 	highlightDocumentIds?: string[]
 	selectedNodeId?: string | null
 	onNodeHover: (nodeId: string | null) => void
@@ -153,6 +159,8 @@ export interface GraphCanvasProps {
 export interface MemoryGraphProps {
 	/** Documents to display - pass this for direct data mode */
 	documents?: GraphApiDocument[]
+	/** Your server route returning fetchMemoryGraph's result, fetched with POST */
+	endpoint?: string
 	/** Whether data is loading */
 	isLoading?: boolean
 	/** Whether more data is being loaded */
@@ -193,6 +201,12 @@ export interface MemoryGraphProps {
 	totalCount?: number
 	/** Callback when user wants to view full document content */
 	onOpenDocument?: (documentId: string) => void
+	/** Custom user-facing labels (partial) - merged with defaults */
+	labels?: MemoryGraphLabels
+	/** Overlay layering controls */
+	layering?: MemoryGraphLayering
+	appearance?: GraphAppearance
+	openDocumentOnEnter?: boolean
 }
 
 export interface ChainEntry {
@@ -222,5 +236,5 @@ export interface LoadingIndicatorProps {
 export type {
 	DocumentWithMemories,
 	MemoryEntry,
-	DocumentsResponse,
+	GraphPage,
 } from "./api-types"

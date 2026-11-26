@@ -5,33 +5,33 @@ description: "Memory tools for OpenAI function calling with Supermemory integrat
 icon: "/images/openai.svg"
 ---
 
+import MigrateCli from "/snippets/migrate-cli.mdx";
+
 Add memory capabilities to the official OpenAI SDKs using Supermemory. Two approaches available:
 
-1. **`withSupermemory` wrapper** - Automatic memory injection into system prompts (zero-config)
+1. **`withSupermemory` wrapper** - Automatic memory injection into each user turn (zero-config)
 2. **Function calling tools** - Explicit tool calls for search/add memory operations
 
-<Note>
-  Migrating to v2 from 1.4.x? Check the [migration guide](/migration/tools-v2-upgrade).
-</Note>
+<MigrateCli legacy="@supermemory/tools 2.x" guideHref="/migration/tools-v3-upgrade" guideLabel="3.0 upgrade guide" />
 
 <Tip>
 **New to Supermemory?** Start with `withSupermemory` for the simplest integration. It automatically injects relevant memories into your prompts.
 </Tip>
 
 <CardGroup>
-<Card title="Supermemory tools on npm" icon="npm" href="https://www.npmjs.com/package/@supermemory/tools">
+<Card title="Supermemory tools on npm" icon="/icons/hugeicons/package.svg" href="https://www.npmjs.com/package/@supermemory/tools">
     Check out the NPM page for more details
 </Card>
-<Card title="Supermemory AI SDK" icon="python" href="https://pypi.org/project/supermemory-openai-sdk/">
+<Card title="Supermemory AI SDK" icon="/icons/hugeicons/python.svg" href="https://pypi.org/project/supermemory-openai-sdk/">
     Check out the PyPI page for more details
 </Card>
 </CardGroup>
 
 ---
 
-## withSupermemory Wrapper
+## withSupermemory wrapper
 
-The simplest way to add memory to your OpenAI client. Wraps your client to automatically inject relevant memories into system prompts.
+The simplest way to add memory to your OpenAI client. Wraps your client to automatically add relevant memories to each user turn, leaving your system prompt untouched so provider prompt caching keeps working.
 
 ### Installation
 
@@ -39,7 +39,7 @@ The simplest way to add memory to your OpenAI client. Wraps your client to autom
 npm install @supermemory/tools openai
 ```
 
-### Quick Start
+### Quick start
 
 ```typescript
 import OpenAI from "openai"
@@ -47,10 +47,10 @@ import { withSupermemory } from "@supermemory/tools/openai"
 
 const openai = new OpenAI()
 
-// Wrap client with memory - memories auto-injected into system prompts
+// Wrap client with memory - memories are added to each user turn
 const client = withSupermemory(openai, {
-  containerTag: "user-123",     // Required: identifies the user/container
-  customId: "conversation-456", // Required: groups messages into the same document 
+  namespace: "user-123",     // Required: identifies the user/container
+  id: "conversation-456", // Required: groups messages into the same document 
   mode: "full",                 // "profile" | "query" | "full"
   addMemory: "always",          // "always" (default) | "never"
 })
@@ -65,15 +65,15 @@ const response = await client.chat.completions.create({
 })
 ```
 
-### Configuration Options
+### Configuration options
 
 ```typescript
 const client = withSupermemory(openai, {
   // Required: identifies the user/container
-  containerTag: "user-123",
+  namespace: "user-123",
 
   // Required: Group messages into the same document
-  customId: "conv-456",
+  id: "conv-456",
 
   // Memory search mode
   mode: "full",  // "profile" (user profile only), "query" (search only), "full" (both)
@@ -89,7 +89,13 @@ const client = withSupermemory(openai, {
 })
 ```
 
-### Modes Explained
+### Prompt caching
+
+Memories are fetched once per user turn (tool-call steps reuse them) and appended to that turn's user message. Earlier turns are re-sent with exactly the block they got the first time, so every request starts with the same bytes as the one before. The profile is fetched once per conversation, on its first turn, and never refreshed; newer facts reach the model through each turn's search. A failed profile fetch is retried on the next user turn. Keep one wrapper per conversation to get this: a new wrapper starts with no memory of earlier turns' blocks.
+
+Recall has a 3 second budget with no retries. If it fails or runs out, the model call goes ahead without memories for that turn. When `addMemory` is `"always"`, the finished turn is saved once after the model's final answer, in the background, and system and developer messages are never saved.
+
+### Modes explained
 
 | Mode | Description | Use Case |
 |------|-------------|----------|
@@ -97,12 +103,12 @@ const client = withSupermemory(openai, {
 | `query` | Searches memories based on user message | Question answering |
 | `full` | Both profile and query-based search | Best for chatbots |
 
-### Works with Responses API Too
+### Works with Responses API too
 
 ```typescript
-const client = withSupermemory(openai, { containerTag: "user-123", customId: "conv-456", mode: "full" })
+const client = withSupermemory(openai, { namespace: "user-123", id: "conv-456", mode: "full" })
 
-// Memories injected into instructions
+// Memories are added to the user input; instructions are left untouched
 const response = await client.responses.create({
   model: "gpt-5",
   instructions: "You are a helpful assistant.",
@@ -110,7 +116,7 @@ const response = await client.responses.create({
 })
 ```
 
-### Environment Variables
+### Environment variables
 
 ```bash
 SUPERMEMORY_API_KEY=your_supermemory_key
@@ -119,7 +125,7 @@ OPENAI_API_KEY=your_openai_key
 
 ---
 
-## Function Calling Tools
+## Function calling tools
 
 For explicit control over memory operations, use function calling tools. The model decides when to search or add memories.
 
@@ -141,7 +147,7 @@ npm install @supermemory/tools
 
 </CodeGroup>
 
-## Quick Start
+## Quick start
 
 <CodeGroup>
 
@@ -203,7 +209,7 @@ const toolDefinitions = getToolDefinitions()
 
 // Create tool executor
 const executeToolCall = createToolCallExecutor(process.env.SUPERMEMORY_API_KEY!, {
-  projectId: "your-project-id",
+  namespace: "your-project-id",
 })
 
 // Use with OpenAI Chat Completions
@@ -231,7 +237,7 @@ if (completion.choices[0]?.message.tool_calls) {
 
 ## Configuration
 
-### Memory Tools Configuration
+### Memory tools configuration
 
 <CodeGroup>
 
@@ -251,16 +257,16 @@ tools = SupermemoryTools(
 import { supermemoryTools } from "@supermemory/tools/openai"
 
 const tools = supermemoryTools(process.env.SUPERMEMORY_API_KEY!, {
-  containerTags: ["your-user-id"],
+  namespace: "your-user-id",
   baseUrl: "https://custom-endpoint.com", // optional
 })
 ```
 
 </CodeGroup>
 
-## Available Tools
+## Available tools
 
-### Search Memories
+### Search memories
 
 Search through user memories using semantic search:
 
@@ -271,9 +277,8 @@ Search through user memories using semantic search:
 result = await tools.search_memories(
     information_to_get="user preferences",
     limit=10,
-    include_full_docs=True
 )
-print(f"Found {len(result.memories)} memories")
+print(f"Found {result.get('count', 0)} memories")
 ```
 
 ```typescript JavaScript
@@ -282,12 +287,12 @@ const searchResult = await tools.searchMemories({
   informationToGet: "user preferences",
   limit: 10,
 })
-console.log(`Found ${searchResult.memories.length} memories`)
+console.log(`Found ${searchResult.count} memories`)
 ```
 
 </CodeGroup>
 
-### Add Memory
+### Add memory
 
 Store new information in memory:
 
@@ -298,7 +303,8 @@ Store new information in memory:
 result = await tools.add_memory(
     memory="User prefers tea over coffee"
 )
-print(f"Added memory with ID: {result.memory.id}")
+memory = result.get("memory") or {}
+print(f"Added memory with ID: {memory.get('id')}")
 ```
 
 ```typescript JavaScript
@@ -306,12 +312,12 @@ print(f"Added memory with ID: {result.memory.id}")
 const addResult = await tools.addMemory({
   memory: "User prefers dark roast coffee",
 })
-console.log(`Added memory with ID: ${addResult.memory.id}`)
+console.log(`Added memory with ID: ${addResult.memory?.id}`)
 ```
 
 </CodeGroup>
 
-## Individual Tools
+## Individual tools
 
 Use tools separately for more granular control:
 
@@ -345,7 +351,7 @@ const toolDefinitions = [searchTool.definition, addTool.definition]
 
 </CodeGroup>
 
-## Complete Chat Example
+## Complete chat example
 
 Here's a complete example showing a multi-turn conversation with memory:
 
@@ -422,7 +428,7 @@ import readline from 'readline'
 
 const client = new OpenAI()
 const executeToolCall = createToolCallExecutor(process.env.SUPERMEMORY_API_KEY!, {
-  projectId: "chat-example",
+  namespace: "chat-example",
 })
 
 const rl = readline.createInterface({
@@ -466,7 +472,7 @@ async function chatWithMemory() {
           messages.push({
             role: "tool",
             tool_call_id: toolCall.id,
-            content: JSON.stringify(result),
+            content: result,
           })
         }
 
@@ -498,7 +504,7 @@ chatWithMemory()
 
 </CodeGroup>
 
-## Error Handling
+## Error handling
 
 Handle errors gracefully in your applications:
 
@@ -551,7 +557,7 @@ async function safeChat() {
 
 </CodeGroup>
 
-## API Reference
+## API reference
 
 ### Python SDK
 
@@ -567,7 +573,7 @@ SupermemoryTools(
 
 **Methods**
 - `get_tool_definitions()` - Get OpenAI function definitions
-- `search_memories(information_to_get, limit, include_full_docs)` - Search user memories
+- `search_memories(information_to_get, limit=10)` - Search user memories. Pass `limit` by keyword: the second positional parameter is the deprecated, ignored `include_full_docs`
 - `add_memory(memory)` - Add new memory
 - `execute_tool_call(tool_call)` - Execute individual tool call
 
@@ -581,6 +587,27 @@ execute_memory_tool_calls(
 ) -> List[dict]
 ```
 
+#### `with_supermemory`
+
+```python
+from openai import OpenAI
+from supermemory_openai import with_supermemory, OpenAIMiddlewareOptions
+
+client = with_supermemory(
+    OpenAI(),
+    OpenAIMiddlewareOptions(
+        container_tag="user-123",  # identifies the user
+        custom_id="conversation-456",  # one wrapper per conversation
+        mode="full",  # "profile" (default) | "query" | "full"
+        add_memory="always",  # "always" (default) | "never"
+    ),
+)
+```
+
+Wraps a sync or async OpenAI client's `chat.completions.create`. The Python wrapper places memories so the provider's prompt cache keeps working. The user's profile is fetched once per conversation and appended to the first system or developer message as a separate block, byte-identical on every later call. Each new user message gets its own search results appended to it, and earlier messages are re-sent with exactly the block they got the first time. Tool-call steps reuse their turn's memories and never search again.
+
+Recall has a 3 second budget with no retries. If it fails or runs out, the model call goes ahead without memories, and a failed profile is fetched again on the next user message. When `add_memory` is `"always"`, each turn is saved once in the background after the model's final reply, and system and developer messages are never saved.
+
 ### JavaScript SDK
 
 #### `supermemoryTools`
@@ -588,7 +615,7 @@ execute_memory_tool_calls(
 ```typescript
 supermemoryTools(
   apiKey: string,
-  config?: { projectId?: string; baseUrl?: string }
+  config?: { namespace?: string; baseUrl?: string }
 )
 ```
 
@@ -597,23 +624,23 @@ supermemoryTools(
 ```typescript
 createToolCallExecutor(
   apiKey: string,
-  config?: { projectId?: string; baseUrl?: string }
-) -> (toolCall: OpenAI.Chat.ChatCompletionMessageToolCall) => Promise<any>
+  config?: { namespace?: string; baseUrl?: string }
+) -> (toolCall: OpenAI.Chat.ChatCompletionMessageToolCall) => Promise<string> // JSON-encoded result
 ```
 
-## Environment Variables
+## Environment variables
 
 Set these environment variables:
 
 ```bash
 SUPERMEMORY_API_KEY=your_supermemory_key
 OPENAI_API_KEY=your_openai_key
-SUPERMEMORY_BASE_URL=https://custom-endpoint.com  # optional
+SUPERMEMORY_BASE_URL=https://custom-endpoint.com  # optional, Python only; in TypeScript pass baseUrl
 ```
 
 ## Development
 
-### Python Setup
+### Python setup
 
 ```bash
 # Install uv
@@ -635,7 +662,7 @@ uv run black src/ tests/
 uv run isort src/ tests/
 ```
 
-### JavaScript Setup
+### JavaScript setup
 
 ```bash
 # Install dependencies
@@ -645,20 +672,17 @@ npm install
 npm test
 
 # Type checking
-npm run type-check
-
-# Linting
-npm run lint
+npm run check-types
 ```
 
-## Next Steps
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="AI SDK Integration" icon="triangle" href="/integrations/ai-sdk">
+  <Card title="AI SDK integration" icon="/icons/hugeicons/triangle.svg" href="/integrations/ai-sdk">
     Use with Vercel AI SDK for streamlined development
   </Card>
 
-  <Card title="Memory API" icon="database" href="/memory-api/overview">
+  <Card title="Add memories" icon="/icons/hugeicons/database-01.svg" href="/ingestion/add-memories">
     Direct API access for advanced memory management
   </Card>
 </CardGroup>

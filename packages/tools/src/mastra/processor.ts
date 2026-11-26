@@ -6,7 +6,8 @@
  * - Conversation saving: Persists conversations to Supermemory after responses
  *
  * Processors integrate with Mastra's processor pipeline:
- * - InputProcessor runs before the LLM call, injecting memories into system messages
+ * - InputProcessor runs before the LLM call, adding the profile to the system messages and
+ *   search results to the user's turn
  * - OutputProcessor runs after the LLM responds, optionally saving the conversation
  *
  * @module
@@ -16,9 +17,14 @@ import {
 	createLogger,
 	normalizeBaseUrl,
 	validateApiKey,
-	MemoryCache,
-	buildMemoriesText,
-	extractQueryText,
+	buildTurnRecall,
+	replaceMemoryContext,
+	stripMemoryContext,
+	turnKey,
+	turnKeys,
+	withTurnMemory,
+	wrapMemoryContext,
+	TurnMemoryByConversation,
 	type Logger,
 	type MemoryMode,
 	type PromptTemplate,
@@ -42,15 +48,14 @@ import type {
  * Internal context shared between input and output processors.
  */
 interface ProcessorContext {
-	containerTag: string
-	customId: string
+	namespace: string
+	id: string
 	apiKey: string
 	baseUrl: string
 	mode: MemoryMode
 	addMemory: "always" | "never"
 	logger: Logger
 	promptTemplate?: PromptTemplate
-	memoryCache: MemoryCache<string>
 }
 
 /**
@@ -64,27 +69,26 @@ function createProcessorContext(
 	const logger = createLogger(options.verbose ?? false)
 
 	return {
-		containerTag: options.containerTag,
-		customId: options.customId,
+		namespace: options.namespace,
+		id: options.id,
 		apiKey,
 		baseUrl,
 		mode: options.mode ?? "profile",
 		addMemory: options.addMemory ?? "always",
 		logger,
 		promptTemplate: options.promptTemplate,
-		memoryCache: new MemoryCache<string>(),
 	}
 }
 
 /**
- * Gets the effective customId from RequestContext (if provided) or falls back to context.
+ * Gets the effective id from RequestContext (if provided) or falls back to context.
  * Per-request thread ID takes precedence to support dynamic per-conversation IDs in server setups.
  */
-function getEffectiveCustomId(
+function getEffectiveId(
 	ctx: ProcessorContext,
 	requestContext?: RequestContext,
 ): string {
-	// Per-request thread ID takes precedence over construction-time customId
+	// Per-request thread ID takes precedence over construction-time id
 	if (requestContext) {
 		const threadId = requestContext.get(MASTRA_THREAD_ID_KEY) as
 			| string
@@ -93,16 +97,57 @@ function getEffectiveCustomId(
 			return threadId
 		}
 	}
-	// Fall back to construction-time customId
-	return ctx.customId
+	// Fall back to construction-time id
+	return ctx.id
+}
+
+const messageText = (message: MastraDBMessage): string => {
+	const { parts, content } = message.content
+	if (Array.isArray(parts) && parts.length > 0) {
+		return parts
+			.flatMap((part) =>
+				part.type === "text" && typeof part.text === "string"
+					? [part.text]
+					: [],
+			)
+			.join(" ")
+	}
+	return typeof content === "string" ? content : ""
+}
+
+const withMessageMemory = (
+	message: MastraDBMessage,
+	memories: string,
+): MastraDBMessage => {
+	const { parts, content } = message.content
+	const textParts =
+		Array.isArray(parts) && parts.length > 0
+			? parts
+			: [
+					{
+						type: "text" as const,
+						text: typeof content === "string" ? content : "",
+					},
+				]
+	return {
+		...message,
+		content: {
+			...message.content,
+			parts: withTurnMemory(textParts, memories) as typeof parts,
+		},
+	}
 }
 
 /**
- * Input processor that injects memories into the system prompt before LLM calls.
+ * Input processor that adds memories to the prompt before LLM calls.
  *
- * This processor runs once at the start of agent execution (processInput).
- * It fetches relevant memories from Supermemory based on the user's message
- * and injects them into the system messages.
+ * This processor runs once at the start of agent execution (processInput):
+ * - The profile ("profile" and "full" modes) is fetched once per conversation and appended to the
+ *   first system message (the agent instructions) as a separate block, or added as a system
+ *   message when there is none. It stays byte-identical on every call.
+ * - Search results ("query" and "full" modes) are appended to the user message they were
+ *   retrieved for, and earlier messages keep the block they first received.
+ * - A failed or timed-out fetch is retried on the next user message.
  *
  * @example
  * ```typescript
@@ -116,8 +161,8 @@ function getEffectiveCustomId(
  *   model: openai("gpt-4o"),
  *   inputProcessors: [
  *     new SupermemoryInputProcessor({
- *       containerTag: "user-123",
- *       customId: "conv-456",
+ *       namespace: "user-123",
+ *       id: "conv-456",
  *       mode: "full",
  *       verbose: true,
  *     }),
@@ -130,73 +175,72 @@ export class SupermemoryInputProcessor implements Processor {
 	readonly name = "Supermemory Memory Injection"
 
 	private ctx: ProcessorContext
+	private turns = new TurnMemoryByConversation()
 
 	constructor(options: SupermemoryMastraOptions) {
 		this.ctx = createProcessorContext(options)
 	}
 
 	async processInput(args: ProcessInputArgs): Promise<ProcessInputResult> {
-		const { messages, messageList, requestContext } = args
+		const { messages, messageList, requestContext, systemMessages } = args
 
-		try {
-			const queryText = extractQueryText(
-				messages as unknown as Array<{
-					role: string
-					content: string | Array<{ type: string; text?: string }>
-				}>,
-				this.ctx.mode,
-			)
+		const users = messages.filter((message) => message.role === "user")
+		const latest = users.at(-1)
+		if (!latest) return messageList
 
-			if (this.ctx.mode !== "profile" && !queryText) {
-				this.ctx.logger.debug("No user message found, skipping memory search")
-				return messageList
-			}
-
-			const effectiveThreadId = getEffectiveCustomId(this.ctx, requestContext)
-			const turnKey = MemoryCache.makeTurnKey(
-				this.ctx.containerTag,
-				effectiveThreadId,
-				this.ctx.mode,
-				queryText || "",
-			)
-
-			const cachedMemories = this.ctx.memoryCache.get(turnKey)
-			if (cachedMemories) {
-				this.ctx.logger.debug("Using cached memories", { turnKey })
-				messageList.addSystem(cachedMemories, "supermemory")
-				return messageList
-			}
-
-			this.ctx.logger.info("Starting memory search", {
-				containerTag: this.ctx.containerTag,
-				threadId: effectiveThreadId,
-				mode: this.ctx.mode,
-			})
-
-			const memories = await buildMemoriesText({
-				containerTag: this.ctx.containerTag,
-				queryText: queryText || "",
+		const keys = turnKeys(messages, (message) => ({
+			role: message.role,
+			text: messageText(message),
+		}))
+		const memory = this.turns.for(getEffectiveId(this.ctx, requestContext))
+		const query = turnKey(messageText(latest))
+		await memory.recall(
+			keys.get(latest) as string,
+			buildTurnRecall({
+				namespace: this.ctx.namespace,
+				query,
 				mode: this.ctx.mode,
 				baseUrl: this.ctx.baseUrl,
 				apiKey: this.ctx.apiKey,
+				source: "tools-mastra",
 				logger: this.ctx.logger,
 				promptTemplate: this.ctx.promptTemplate,
-			})
+			}),
+		)
 
-			if (memories) {
-				this.ctx.memoryCache.set(turnKey, memories)
-				messageList.addSystem(memories, "supermemory")
-				this.ctx.logger.debug("Injected memories into system prompt", {
-					length: memories.length,
-				})
-			}
-
-			return messageList
-		} catch (error) {
-			this.ctx.logger.error("Error fetching memories", {
-				error: error instanceof Error ? error.message : "Unknown error",
-			})
-			return messageList
+		const blocks = await Promise.all(
+			messages.map((message) => {
+				const key = keys.get(message)
+				return key === undefined ? undefined : memory.get(key)
+			}),
+		)
+		const profile = wrapMemoryContext(memory.profile)
+		if (!profile && blocks.every((block) => !block)) return messageList
+		const system = systemMessages.findIndex(
+			(message) =>
+				message.role === "system" && typeof message.content === "string",
+		)
+		return {
+			messages: messages.map((message, index) => {
+				const block = blocks[index]
+				return block === undefined ? message : withMessageMemory(message, block)
+			}),
+			systemMessages:
+				system === -1
+					? profile
+						? [...systemMessages, { role: "system" as const, content: profile }]
+						: systemMessages
+					: systemMessages.map((message, index) =>
+							index === system
+								? ({
+										...message,
+										content: replaceMemoryContext(
+											message.content as string,
+											memory.profile,
+										),
+									} as (typeof systemMessages)[number])
+								: message,
+						),
 		}
 	}
 }
@@ -206,7 +250,7 @@ export class SupermemoryInputProcessor implements Processor {
  *
  * This processor runs once after generation completes (processOutputResult).
  * When addMemory is set to "always", it saves the conversation to Supermemory
- * using the /v4/conversations API for thread-based storage.
+ * as one document per conversation.
  *
  * @example
  * ```typescript
@@ -220,8 +264,8 @@ export class SupermemoryInputProcessor implements Processor {
  *   model: openai("gpt-4o"),
  *   outputProcessors: [
  *     new SupermemoryOutputProcessor({
- *       containerTag: "user-123",
- *       customId: "conv-456",
+ *       namespace: "user-123",
+ *       id: "conv-456",
  *       addMemory: "always",
  *     }),
  *   ],
@@ -247,7 +291,7 @@ export class SupermemoryOutputProcessor implements Processor {
 			return messages
 		}
 
-		const effectiveCustomId = getEffectiveCustomId(this.ctx, requestContext)
+		const effectiveId = getEffectiveId(this.ctx, requestContext)
 
 		try {
 			const conversationMessages = this.convertToConversationMessages(messages)
@@ -258,16 +302,17 @@ export class SupermemoryOutputProcessor implements Processor {
 			}
 
 			const response = await addConversation({
-				conversationId: effectiveCustomId,
+				id: effectiveId,
 				messages: conversationMessages,
-				containerTags: [this.ctx.containerTag],
+				namespace: this.ctx.namespace,
 				apiKey: this.ctx.apiKey,
 				baseUrl: this.ctx.baseUrl,
+				source: "tools-mastra",
 			})
 
 			this.ctx.logger.info("Conversation saved successfully", {
-				containerTag: this.ctx.containerTag,
-				customId: effectiveCustomId,
+				namespace: this.ctx.namespace,
+				id: effectiveId,
 				messageCount: conversationMessages.length,
 				responseId: response.id,
 			})
@@ -294,7 +339,7 @@ export class SupermemoryOutputProcessor implements Processor {
 			const content = msg.content
 
 			if (content.content && typeof content.content === "string") {
-				result.push({ role, content: content.content })
+				result.push({ role, content: stripMemoryContext(content.content) })
 				continue
 			}
 
@@ -308,8 +353,9 @@ export class SupermemoryOutputProcessor implements Processor {
 					)
 					.map((part) => ({
 						type: "text" as const,
-						text: part.text,
+						text: stripMemoryContext(part.text),
 					}))
+					.filter((part) => part.text)
 
 				if (textParts.length > 0) {
 					result.push({ role, content: textParts })
@@ -324,7 +370,7 @@ export class SupermemoryOutputProcessor implements Processor {
 /**
  * Creates a Supermemory input processor for memory injection.
  *
- * @param options - Configuration options including required containerTag and customId
+ * @param options - Configuration options including required namespace and id
  * @returns Configured SupermemoryInputProcessor instance
  *
  * @example
@@ -334,8 +380,8 @@ export class SupermemoryOutputProcessor implements Processor {
  * import { openai } from "@ai-sdk/openai"
  *
  * const processor = createSupermemoryProcessor({
- *   containerTag: "user-123",
- *   customId: "conv-456",
+ *   namespace: "user-123",
+ *   id: "conv-456",
  *   mode: "full",
  *   verbose: true,
  * })
@@ -357,7 +403,7 @@ export function createSupermemoryProcessor(
 /**
  * Creates a Supermemory output processor for saving conversations.
  *
- * @param options - Configuration options including required containerTag and customId
+ * @param options - Configuration options including required namespace and id
  * @returns Configured SupermemoryOutputProcessor instance
  *
  * @example
@@ -367,8 +413,8 @@ export function createSupermemoryProcessor(
  * import { openai } from "@ai-sdk/openai"
  *
  * const processor = createSupermemoryOutputProcessor({
- *   containerTag: "user-123",
- *   customId: "conv-456",
+ *   namespace: "user-123",
+ *   id: "conv-456",
  *   addMemory: "always",
  * })
  *
@@ -402,8 +448,8 @@ export function createSupermemoryOutputProcessor(
  * import { openai } from "@ai-sdk/openai"
  *
  * const { input, output } = createSupermemoryProcessors({
- *   containerTag: "user-123",
- *   customId: "conv-456",
+ *   namespace: "user-123",
+ *   id: "conv-456",
  *   mode: "full",
  *   addMemory: "always",
  * })

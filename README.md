@@ -13,6 +13,7 @@
 <p align="center">
   <a href="https://supermemory.ai/docs">Docs</a> ·
   <a href="https://supermemory.ai/docs/quickstart">Quickstart</a> ·
+  <a href="https://supermemory.ai/docs/self-hosting/overview">Self-host</a> ·
   <a href="https://console.supermemory.ai">Dashboard</a> ·
   <a href="https://supermemory.link/discord">Discord</a>
 </p>
@@ -21,6 +22,16 @@
   <a href="https://www.npmjs.com/package/supermemory"><img src="https://img.shields.io/npm/v/supermemory?style=flat-square&color=blue" alt="npm" /></a>
   <a href="https://pypi.org/project/supermemory/"><img src="https://img.shields.io/pypi/v/supermemory?style=flat-square&color=blue" alt="pypi" /></a>
   <a href="https://supermemory.ai/docs"><img src="https://img.shields.io/badge/docs-supermemory.ai-blue?style=flat-square" alt="docs" /></a>
+</p>
+
+<p align="center">
+  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
+  <strong>#1 on every major AI memory benchmark — <a href="https://github.com/xiaowu0162/LongMemEval">LongMemEval</a>, <a href="https://github.com/snap-research/locomo">LoCoMo</a>, and <a href="https://github.com/Salesforce/ConvoMem">ConvoMem</a>.</strong><br/>
+  <strong>95% Recall@15 with a 99.4% context reduction · ~50ms user profiles.</strong><br/>
+  <a href="https://supermemory.ai/research">Read the research →</a>
 </p>
 
 ---
@@ -56,7 +67,7 @@ All of this is in our single memory structure and ontology.
 
 <h3>🧑‍💻 I use AI tools</h3>
 
-Build your own personal supermemory by using our app. Builds **persistent memory graph across every conversation**.
+Give Claude Code, Muse Code, Cursor, Codex and OpenCode **persistent memory across every conversation** with a plugin or the MCP server.
 
 Your AI remembers your preferences, projects, past discussions — and gets smarter over time.
 
@@ -75,27 +86,32 @@ No vector DB config. No embedding pipelines. No chunking strategies.
 
 </td>
 </tr>
+<tr>
+<td colspan="2" valign="top">
+
+<h3>🖥️ I want to run it myself</h3>
+
+State-of-the-art memory, on your machine. **One binary. Zero config.** Bring any model — or run fully offline with Ollama.
+
+```bash
+curl -fsSL https://supermemory.ai/install | bash
+```
+
+**[→ Jump to Supermemory local](#supermemory-local--run-it-yourself)**
+
+</td>
+</tr>
 </table>
 
 ---
 
 ## Give your AI memory
 
-The Supermemory App, browser extension, plugins and MCP server gives any compatible AI assistant persistent memory. One install, and your AI remembers you.
-
-### The app
-
-You can use supermemory without any code, by using our consumer-facing app for free.
-
-Start at https://app.supermemory.ai
-
-<img width="1705" height="1030" alt="image" src="https://github.com/user-attachments/assets/5b43af30-b998-4585-8de6-f3e9a26d894a" />
-
-It also comes with an agent embedded inside, which we call Nova.
+Plugins and the MCP server give any compatible AI assistant persistent memory. One install, and your AI remembers you.
 
 ### Supermemory Plugins
 
-Supermemory comes built with Plugins for Claude Code, OpenCode, OpenClaw, and Hermes.
+Supermemory comes built with plugins for Claude Code, Muse Code, Cursor, Codex, OpenCode, OpenClaw, and Hermes.
 
 <img width="844" height="484" alt="image" src="https://github.com/user-attachments/assets/ecb879a2-8652-495d-9228-f305a97ba603" />
 
@@ -103,18 +119,31 @@ These plugins are implementations of the supermemory API, and they are open sour
 
 You can find them here: 
 
-- Openclaw plugin: https://github.com/supermemoryai/openclaw-supermemory
-- Claude code plugin: https://github.com/supermemoryai/claude-supermemory
+- Claude Code plugin: https://github.com/supermemoryai/claude-supermemory
+- Muse Code plugin: https://github.com/supermemoryai/muse-supermemory
+- Cursor plugin: https://github.com/supermemoryai/cursor-supermemory
+- Codex plugin: https://github.com/supermemoryai/codex-supermemory
+- OpenClaw plugin: https://github.com/supermemoryai/openclaw-supermemory
 - OpenCode plugin: https://github.com/supermemoryai/opencode-supermemory
 - Hermes agent (Supermemory memory provider): https://github.com/NousResearch/hermes-agent
 
-### MCP - Quick install
+### MCP
 
-```bash
-npx -y install-mcp@latest https://mcp.supermemory.ai/mcp --client claude --oauth=yes
+Server URL:
+
+```text
+https://mcp.supermemory.ai/mcp
 ```
 
-Replace `claude` with your client: `cursor`, `windsurf`, `vscode`, etc.
+```json
+{
+  "mcpServers": {
+    "supermemory": {
+      "url": "https://mcp.supermemory.ai/mcp"
+    }
+  }
+}
+```
 
 Read more about our MCP here - https://supermemory.ai/docs/supermemory-mcp/mcp
 
@@ -151,21 +180,6 @@ Add this to your MCP client config:
   "mcpServers": {
     "supermemory": {
       "url": "https://mcp.supermemory.ai/mcp"
-    }
-  }
-}
-```
-
-Or use an API key instead of OAuth:
-
-```json
-{
-  "mcpServers": {
-    "supermemory": {
-      "url": "https://mcp.supermemory.ai/mcp",
-      "headers": {
-        "Authorization": "Bearer sm_your_api_key_here"
-      }
     }
   }
 }
@@ -245,7 +259,7 @@ const agent = new Agent(withSupermemory(config, "user-123", { mode: "full" }));
 
 ```typescript
 // Hybrid (default) — RAG + Memory in one query
-const results = await client.search.memories({
+const results = await client.search({
   q: "how do I deploy?",
   containerTag: "user_123",
   searchMode: "hybrid",
@@ -253,7 +267,7 @@ const results = await client.search.memories({
 // Returns deployment docs (RAG) + user's deploy preferences (Memory)
 
 // Memories only
-const results = await client.search.memories({
+const results = await client.search({
   q: "user preferences",
   containerTag: "user_123",
   searchMode: "memories",
@@ -287,13 +301,64 @@ Real-time webhooks. Documents automatically processed, chunked, and searchable.
 |---|---|
 | `client.add()` | Store content — text, conversations, URLs, HTML |
 | `client.profile()` | User profile + optional search in one call |
-| `client.search.memories()` | Hybrid search across memories and documents |
-| `client.search.documents()` | Document search with metadata filters |
+| `client.search()` | Hybrid search across memories and documents (`searchMode`) |
+| `client.search.documents()` | Document search with metadata filters (legacy v3 response shape) |
 | `client.documents.uploadFile()` | Upload PDFs, images, videos, code |
 | `client.documents.list()` | List and filter documents |
 | `client.settings.update()` | Configure memory extraction and chunking |
 
 Full API reference → [supermemory.ai/docs](https://supermemory.ai/docs)
+
+---
+
+## Supermemory local — run it yourself
+
+State-of-the-art memory, on your machine. One binary. Zero config.
+
+```bash
+curl -fsSL https://supermemory.ai/install | bash
+# or
+npx supermemory local
+```
+
+```bash
+supermemory-server
+```
+
+First boot sets up the embedded Supermemory graph engine, local embeddings, and your credentials, then prints an API key. The full Memory API — documents, memories, user profiles, hybrid search — runs against `http://localhost:6767`.
+
+```typescript
+const client = new Supermemory({
+  apiKey: "sm_...",
+  baseURL: "http://localhost:6767", // that's the only change
+});
+```
+
+- **Bring any model** — OpenAI, Anthropic, Gemini, Groq, or any OpenAI-compatible endpoint. An interactive wizard walks you through it on first boot.
+- **Embeddings** — local `Xenova/bge-base-en-v1.5` by default (no API key); optionally OpenAI, Gemini, or Ollama. Same provider stack as cloud.
+- **Offline text memories if you want** — point it at Ollama (`gpt-oss:20b` works great), disable telemetry with `SUPERMEMORY_DISABLE_TELEMETRY=1`, and use local text or file inputs after the first embedding-model download. URL ingestion uses a hosted reader service.
+- **Your data, one directory** — everything lives in `~/.supermemory`, easy to back up or move.
+- **Same API as the platform** — prototype locally, ship on the hosted platform by changing `baseURL`.
+
+### Run with Docker
+
+Prebuilt images support Linux amd64 and arm64. You don’t need to build or clone the server source.
+
+For a new installation, run these commands in an empty directory and set your own LLM provider key:
+
+```bash
+release_url=https://github.com/supermemoryai/supermemory/releases
+curl -fL "$release_url/download/server-v0.0.9/compose.yaml" -o compose.yaml
+export OPENAI_API_KEY=your_openai_api_key_here
+export SUPERMEMORY_VERSION=0.0.9
+docker compose up -d --wait --wait-timeout 180
+```
+
+The API listens on `http://localhost:6767`. Data and credentials persist in the `supermemory_supermemory-data` volume. Get your local API key with `docker compose exec supermemory cat /data/api-key`; requests require it even on localhost.
+
+Read the [Docker setup and upgrade instructions](apps/docs/self-hosting/docker.mdx) for persistent provider configuration, backups and upgrades. Keep the existing volume and keys when upgrading; **don’t run `docker compose down -v`**.
+
+Read the [self-hosting docs](https://supermemory.ai/docs/self-hosting/overview) — [quickstart](https://supermemory.ai/docs/self-hosting/quickstart), [configuration](https://supermemory.ai/docs/self-hosting/configuration), [embeddings](https://supermemory.ai/docs/self-hosting/embeddings), and [local vs. Enterprise](https://supermemory.ai/docs/self-hosting/local-vs-enterprise).
 
 ---
 
@@ -303,9 +368,13 @@ Supermemory is state of the art across all major AI memory benchmarks:
 
 | Benchmark | What it measures | Result |
 |---|---|---|
-| **[LongMemEval](https://github.com/xiaowu0162/LongMemEval)** | Long-term memory across sessions with knowledge updates | **81.6% — #1** |
+| **[LongMemEval](https://github.com/xiaowu0162/LongMemEval)** | Long-term memory across sessions with knowledge updates | **#1** |
 | **[LoCoMo](https://github.com/snap-research/locomo)** | Fact recall across extended conversations (single-hop, multi-hop, temporal, adversarial) | **#1** |
 | **[ConvoMem](https://github.com/Salesforce/ConvoMem)** | Personalization and preference learning | **#1** |
+
+On LongMemEval, supermemory reaches **95% Recall@15 while adding only ~720 tokens of context — a 99.4% context reduction** (99.6% at @10, 99.8% at @5). Recall by category: Knowledge Updates 99%, Assistant recall 100%, User recall 97%, Multi-session 93%, Temporal Reasoning 91%, Preference 90%.
+
+We also built the **Supermemory Filesystem (SMFS)**, which uses **3.0× fewer tokens on Claude** (24M vs 72M) and **1.75× fewer on Codex** across the 110-question xAFS benchmark. See the full write-ups on our [research page](https://supermemory.ai/research).
 
 We also built **[MemoryBench](https://supermemory.ai/docs/memorybench/overview)** — an open-source framework for standardized, reproducible benchmarks of memory providers. Compare Supermemory, Mem0, Zep, and others head-to-head:
 
@@ -350,6 +419,7 @@ Your app / AI tool
 
 - 📖 [Documentation](https://supermemory.ai/docs)
 - 🚀 [Quickstart](https://supermemory.ai/docs/quickstart)
+- 🖥️ [Self-hosting (Supermemory local)](https://supermemory.ai/docs/self-hosting/overview)
 - 🧪 [MemoryBench](https://supermemory.ai/docs/memorybench/overview)
 - 🔌 [Integrations](https://supermemory.ai/docs/integrations)
 - 💬 [Discord](https://supermemory.link/discord)

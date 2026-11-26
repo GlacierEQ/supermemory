@@ -23,7 +23,7 @@ For async HTTP support (recommended):
 ```bash
 uv add supermemory-openai-sdk[async]
 # or
-pip install supermemory-openai-sdk[async]
+pip install 'supermemory-openai-sdk[async]'
 ```
 
 ## Quick Start
@@ -49,7 +49,9 @@ async def main():
             custom_id="chat-123",      # Required: groups messages into documents
             mode="full",               # "profile", "query", or "full"
             verbose=True,              # Enable logging
-            add_memory="always"        # Automatically save conversations (default)
+            add_memory="always",       # Automatically save conversations (default)
+            api_key="your-supermemory-api-key",  # Or use SUPERMEMORY_API_KEY
+            # base_url="https://api.supermemory.ai",  # Optional custom endpoint
         )
     )
 
@@ -138,9 +140,9 @@ response = openai_with_memory.chat.completions.create(
 )
 ```
 
-**Event Loop Management**: The middleware properly handles event loops using `asyncio.run()` for sync clients. If called from within an existing async context, it automatically runs in a separate thread to avoid conflicts.
+**Event Loop Management**: For sync clients, recall runs on a short-lived daemon thread with its own event loop, so the middleware works the same whether or not it is called from inside a running event loop.
 
-**Background Task Management**: When `add_memory="always"`, memory storage happens in background tasks. Use context managers or manual cleanup to ensure tasks complete:
+**Background Task Management**: When `add_memory="always"`, saving never delays the model call; each turn is saved once its final assistant reply arrives. Async clients save in an asyncio task; sync clients save on a daemon thread. Saves use a 5-second timeout and no retries. When the interpreter exits, pending sync saves get up to 5 more seconds to finish. Use a context manager, or wait for pending saves yourself, to make sure the last turn is saved before you exit:
 
 ```python
 from supermemory_openai import with_supermemory, OpenAIMiddlewareOptions
@@ -160,7 +162,28 @@ client = with_supermemory(
 )
 response = await client.chat.completions.create(...)
 await client.wait_for_background_tasks()  # Ensure memory is saved
+
+# Sync clients
+with with_supermemory(
+    OpenAI(),
+    OpenAIMiddlewareOptions(container_tag="user-123", custom_id="session-456")
+) as client:
+    response = client.chat.completions.create(...)
+# Pending saves are joined for up to 5 seconds on exit
+# (or call client.wait_for_background_captures())
 ```
+
+## How memories are placed
+
+Memories are added in a way that keeps the provider's prompt cache working. Every block is wrapped in `<supermemory context="user-memories" readonly>` … `</supermemory>`.
+
+- **Profile, in the system prompt** (`profile` and `full` mode). The user's profile is fetched once per conversation, on the first user message where the fetch succeeds (an empty profile counts). It is appended as a separate block to the first system or developer message, or sent as a new leading system message when there is none. It is byte-identical on every later call, tool-only calls included, and it is never refreshed: there is no TTL or timer. Each request carries exactly one copy, and the profile never appears in a user message.
+- **Search results, on the user message** (`query` and `full` mode). Each new user message gets the search results retrieved for it (`/v4/search`), minus anything the profile or an earlier turn already showed. Earlier user messages keep exactly the block they first received, so the cached prefix keeps matching.
+- **Turns.** A user turn is identified by its text plus the assistant reply before it. Asking the same question again after a new reply is a new turn with its own search. Trimming old messages from the front of the history keeps the remaining messages' blocks. Tool-call continuations reuse their turn's block and never search again.
+- **Failures.** Recall waits at most 3 seconds and makes one attempt with no retries. On a timeout or error the call goes ahead without that memory. A profile that failed to load is fetched again on the next user message, so it can join the system prompt one turn late; that changes the cached prefix once.
+- **Bounds.** One wrapper serves one conversation (`custom_id`) and remembers up to 500 turns. If older turns are evicted, they are sent without their blocks from then on. The profile is fetched again only after the process restarts (a new wrapper), which counts as a new conversation.
+- **Saves.** With `add_memory="always"`, a turn is saved once its final assistant reply arrives (a reply that only calls tools keeps the turn open). The save holds the conversation plus that reply, without system or developer messages, and runs in the background. A streamed reply is saved at its final chunk, so a caller that stops reading there still saves the turn. Through `with_streaming_response` the reply body is not visible to the wrapper, so those turns are saved when the request is made, without the reply.
+- **Request headers.** Every request to Supermemory sends `x-sm-source: openai-python` and `x-sm-plugin-version` with the installed package version.
 
 ## Middleware Configuration
 
@@ -169,7 +192,7 @@ await client.wait_for_background_tasks()  # Ensure memory is saved
 The middleware supports three different modes for memory injection:
 
 #### `"profile"` mode (default)
-Injects all static and dynamic profile memories into every request. Best for maintaining consistent user context.
+Adds the user's static and dynamic profile to the system prompt once per conversation, on the first user turn where it loads. Later turns make no Supermemory call. Best for maintaining consistent user context.
 
 ```python
 openai_with_memory = with_supermemory(
@@ -179,7 +202,7 @@ openai_with_memory = with_supermemory(
 ```
 
 #### `"query"` mode
-Only searches for memories relevant to the current user message. More efficient for large memory stores.
+Only searches for memories relevant to the current user message (`/v4/search`, never the profile). More efficient for large memory stores.
 
 ```python
 openai_with_memory = with_supermemory(
@@ -189,7 +212,7 @@ openai_with_memory = with_supermemory(
 ```
 
 #### `"full"` mode
-Combines both profile and query modes - includes all profile memories plus relevant search results.
+Combines both profile and query modes: the profile once in the system prompt, plus search results on every user message.
 
 ```python
 openai_with_memory = with_supermemory(
@@ -229,6 +252,17 @@ openai_with_memory = with_supermemory(
 
 ## Manual Memory Tools
 
+`SupermemoryTools` exposes seven OpenAI function-calling tools:
+
+- `search_memories` and `add_memory`
+- `get_profile`
+- `document_list`, `document_add`, and `document_delete`
+- `memory_forget`
+
+The configured `project_id` or `container_tags` define the trusted scope. The
+primary tag is used for profile, list, search, and forget operations, and the
+model cannot select a different tag.
+
 ### SupermemoryTools Class
 
 ```python
@@ -245,8 +279,7 @@ tools = SupermemoryTools(
 # Search memories
 result = await tools.search_memories(
     information_to_get="user preferences",
-    limit=10,
-    include_full_docs=True
+    limit=10
 )
 
 # Add memory
@@ -254,11 +287,27 @@ result = await tools.add_memory(
     memory="User prefers tea over coffee"
 )
 
-# Fetch specific memory
-result = await tools.fetch_memory(
-    memory_id="memory-id-here"
+# Get the configured user's profile
+result = await tools.get_profile(query="favorite drinks")
+
+# List, add, or delete source documents
+documents = await tools.document_list(limit=10, page=1)
+document = await tools.document_add(
+    content="Meeting notes...",
+    title="Weekly meeting"
+)
+deleted = await tools.document_delete(document_id="document-id-here")
+
+# Soft-forget one extracted memory
+forgotten = await tools.memory_forget(
+    memory_id="memory-entry-id-here",
+    reason="outdated"
 )
 ```
+
+`include_full_docs` is retained as a deprecated Python argument for compatibility,
+but v4 search returns relevant memories and chunks instead of full source documents.
+It is no longer exposed in the OpenAI tool schema.
 
 ### Individual Tools
 
@@ -266,12 +315,20 @@ result = await tools.fetch_memory(
 from supermemory_openai import (
     create_search_memories_tool,
     create_add_memory_tool,
-    create_fetch_memory_tool
+    create_get_profile_tool,
+    create_document_list_tool,
+    create_document_delete_tool,
+    create_document_add_tool,
+    create_memory_forget_tool,
 )
 
 search_tool = create_search_memories_tool("your-api-key")
 add_tool = create_add_memory_tool("your-api-key")
-fetch_tool = create_fetch_memory_tool("your-api-key")
+profile_tool = create_get_profile_tool("your-api-key")
+list_tool = create_document_list_tool("your-api-key")
+delete_tool = create_document_delete_tool("your-api-key")
+document_add_tool = create_document_add_tool("your-api-key")
+forget_tool = create_memory_forget_tool("your-api-key")
 ```
 
 ### Function Calling Integration
@@ -323,6 +380,8 @@ class OpenAIMiddlewareOptions:
     verbose: bool = False                      # Enable detailed logging
     mode: Literal["profile", "query", "full"] = "profile"  # Memory injection mode
     add_memory: Literal["always", "never"] = "always"      # Auto-save behavior
+    api_key: Optional[str] = None               # Falls back to SUPERMEMORY_API_KEY
+    base_url: Optional[str] = None              # Falls back to SUPERMEMORY_BASE_URL
 ```
 
 ### SupermemoryTools
@@ -343,6 +402,11 @@ SupermemoryTools(
 - `get_tool_definitions()` - Get OpenAI function definitions
 - `search_memories()` - Search user memories
 - `add_memory()` - Add new memory
+- `get_profile()` - Get the configured user's profile
+- `document_list()` - List source document metadata
+- `document_add()` - Queue a source document for processing
+- `document_delete()` - Delete an in-scope source document
+- `memory_forget()` - Soft-forget one extracted memory
 - `execute_tool_call()` - Execute individual tool call
 
 ## Error Handling
@@ -397,7 +461,7 @@ All exceptions include the original error for debugging and have descriptive err
 
 Set these environment variables:
 
-- `SUPERMEMORY_API_KEY` - Your Supermemory API key (required)
+- `SUPERMEMORY_API_KEY` - Your Supermemory API key (unless passed in middleware options)
 - `OPENAI_API_KEY` - Your OpenAI API key (required for examples)
 
 Optional for testing:
@@ -408,7 +472,7 @@ Optional for testing:
 
 ### Required
 - `openai>=1.102.0` - Official OpenAI Python SDK
-- `supermemory>=3.1.0` - Supermemory client
+- `supermemory>=3.50.0` - Supermemory client
 - `requests>=2.25.0` - HTTP requests (fallback)
 
 ### Optional
@@ -416,7 +480,7 @@ Optional for testing:
 
 Install with async support:
 ```bash
-pip install supermemory-openai-sdk[async]
+pip install 'supermemory-openai-sdk[async]'
 ```
 
 ## Development

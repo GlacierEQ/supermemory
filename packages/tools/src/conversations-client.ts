@@ -1,10 +1,8 @@
-/**
- * Client for the Supermemory Conversations API
- *
- * This module provides a helper function to ingest conversations using the
- * /v4/conversations endpoint, which supports structured messages with smart
- * diffing and append detection on the backend.
- */
+import type { AddResponse } from "supermemory"
+import {
+	type SupermemorySource,
+	createSupermemoryClient,
+} from "./shared/context"
 
 export interface ConversationMessage {
 	role: "user" | "assistant" | "system" | "tool"
@@ -14,10 +12,53 @@ export interface ConversationMessage {
 	tool_call_id?: string
 }
 
-export interface ContentPart {
-	type: "text" | "image_url"
-	text?: string
-	image_url?: { url: string }
+export type ContentPart =
+	| { type: "text"; text: string }
+	| { type: "image_url"; imageUrl: { url: string } }
+
+const BASE64_ALPHABET =
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+const encodeBase64 = (bytes: Uint8Array): string => {
+	let encoded = ""
+	for (let index = 0; index < bytes.length; index += 3) {
+		const first = bytes[index] ?? 0
+		const second = bytes[index + 1]
+		const third = bytes[index + 2]
+		const value = (first << 16) | ((second ?? 0) << 8) | (third ?? 0)
+		encoded += BASE64_ALPHABET[(value >> 18) & 63]
+		encoded += BASE64_ALPHABET[(value >> 12) & 63]
+		encoded += second === undefined ? "=" : BASE64_ALPHABET[(value >> 6) & 63]
+		encoded += third === undefined ? "=" : BASE64_ALPHABET[value & 63]
+	}
+	return encoded
+}
+
+/** Normalize supported SDK image representations to a URL or data URL. */
+export const toConversationImageUrl = (
+	value: unknown,
+	mediaType = "image/jpeg",
+): string | null => {
+	if (typeof URL !== "undefined" && value instanceof URL) {
+		return value.toString()
+	}
+	if (typeof value === "string") {
+		const trimmed = value.trim()
+		if (!trimmed) return null
+		return /^[a-z][a-z\d+.-]*:/i.test(trimmed)
+			? trimmed
+			: `data:${mediaType};base64,${trimmed}`
+	}
+
+	const bytes =
+		value instanceof Uint8Array
+			? value
+			: value instanceof ArrayBuffer
+				? new Uint8Array(value)
+				: null
+	return bytes && bytes.length > 0
+		? `data:${mediaType};base64,${encodeBase64(bytes)}`
+		: null
 }
 
 export interface ToolCall {
@@ -30,73 +71,75 @@ export interface ToolCall {
 }
 
 export interface AddConversationParams {
-	conversationId: string
+	id: string
 	messages: ConversationMessage[]
-	containerTags?: string[]
+	namespace: string
 	metadata?: Record<string, string | number | boolean>
-	entityContext?: string
+	supportingContext?: string
 	apiKey: string
 	baseUrl?: string
+	source: SupermemorySource
 }
 
-export interface AddConversationResponse {
-	id: string
-	conversationId: string
-	status: string
+const CONVERSATION_REQUEST_TIMEOUT_SECONDS = 30
+
+const ROLE_LABELS: Record<ConversationMessage["role"], string> = {
+	user: "User",
+	assistant: "Assistant",
+	system: "System",
+	tool: "Tool",
 }
 
-/**
- * Adds a conversation to Supermemory using the /v4/conversations endpoint
- *
- * This endpoint supports:
- * - Structured messages with roles (user, assistant, system, tool)
- * - Multi-modal content (text, images)
- * - Tool calls and responses
- *
- * @param params - Configuration for adding the conversation
- * @returns Promise resolving to the conversation response
- * @throws Error if the API request fails
- *
- * @example
- * ```typescript
- * const response = await addConversation({
- *   conversationId: "conv-123",
- *   messages: [
- *     { role: "user", content: "Hello!" },
- *     { role: "assistant", content: "Hi there!" }
- *   ],
- *   containerTags: ["user-456"],
- *   apiKey: process.env.SUPERMEMORY_API_KEY,
- * })
- * ```
- */
+// Data URLs are dropped: inlining base64 would bloat the document text.
+const formatContentPart = (part: ContentPart): string => {
+	if (part.type === "text") return part.text
+	const url = part.imageUrl.url
+	return url.startsWith("data:") ? "[image]" : `[image: ${url}]`
+}
+
+export function formatConversationText(
+	messages: ConversationMessage[],
+): string {
+	return messages
+		.map((message) => {
+			const content =
+				typeof message.content === "string"
+					? message.content
+					: message.content.map(formatContentPart).join(" ")
+			const toolCalls = (message.tool_calls ?? [])
+				.map(
+					(call) =>
+						`[tool call: ${call.function.name}(${call.function.arguments})]`,
+				)
+				.join(" ")
+			const label = message.name
+				? `${ROLE_LABELS[message.role]} (${message.name})`
+				: ROLE_LABELS[message.role]
+			return `${label}: ${[content, toolCalls].filter(Boolean).join(" ")}`
+		})
+		.join("\n\n")
+}
+
+// Same id → same document, so one conversation stays one document.
 export async function addConversation(
 	params: AddConversationParams,
-): Promise<AddConversationResponse> {
-	const baseUrl = params.baseUrl || "https://api.supermemory.ai"
-	const url = `${baseUrl}/v4/conversations`
-
-	const response = await fetch(url, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${params.apiKey}`,
-		},
-		body: JSON.stringify({
-			conversationId: params.conversationId,
-			messages: params.messages,
-			containerTags: params.containerTags,
-			metadata: params.metadata,
-			entityContext: params.entityContext,
-		}),
+): Promise<AddResponse> {
+	const client = createSupermemoryClient({
+		apiKey: params.apiKey,
+		baseUrl: params.baseUrl,
+		source: params.source,
 	})
-
-	if (!response.ok) {
-		const errorText = await response.text().catch(() => "Unknown error")
-		throw new Error(
-			`Failed to add conversation: ${response.status} ${response.statusText}. ${errorText}`,
-		)
-	}
-
-	return await response.json()
+	return await client.add(
+		params.namespace,
+		{
+			content: formatConversationText(params.messages),
+			id: params.id,
+			dreaming: "instant",
+			...(params.metadata && { metadata: params.metadata }),
+			...(params.supportingContext && {
+				supportingContext: params.supportingContext,
+			}),
+		},
+		{ timeoutInSeconds: CONVERSATION_REQUEST_TIMEOUT_SECONDS, maxRetries: 0 },
+	)
 }

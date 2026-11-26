@@ -1,27 +1,50 @@
 ---
 title: "Claude Code"
 sidebarTitle: "Claude Code"
-description: "Claude Code Supermemory Plugin — persistent memory across coding sessions"
+description: "Supermemory plugin for Claude Code. Keeps memory across coding sessions."
 icon: "/images/claude-code-icon.svg"
 ---
 
-<div className="w-1/2">
-  <img
-    src="/images/claude-code-supermemory.png"
-    alt="Claude Code + Supermemory"
-    className="rounded-lg shadow-lg"
-  />
-</div>
+<img
+  src="/images/claude-code-supermemory.png"
+  alt="Claude Code + Supermemory"
+  className="rounded-lg"
+/>
 
-<Warning>
-This integration requires the **Supermemory Pro plan**. [Upgrade here](https://console.supermemory.ai/billing).
-</Warning>
+[supermemory](https://github.com/supermemoryai/claude-supermemory) is a Claude Code plugin that gives your AI persistent memory across sessions. Your agent remembers what you worked on — across sessions, across projects.
 
-[Claude-Supermemory](https://github.com/supermemoryai/claude-supermemory) is a Claude Code plugin that gives your AI persistent memory across sessions. Your agent remembers what you worked on — across sessions, across projects.
+<Tip>
+**Prefer to keep everything on your machine?** This plugin works with [self-hosted Supermemory](/self-hosting/overview) — run `npx supermemory local`, then set `baseUrl` in project config (or point your install at your local API) and use the API key printed on first boot.
+</Tip>
 
-## Get Your API Key
+## Install the plugin
 
-Create a Supermemory API key from the [API Keys](https://console.supermemory.ai/keys) page, then add it to your shell profile so it persists across sessions:
+> **Requires Node.js 18+** on your PATH — the memory hooks run as Node scripts.
+
+```bash
+# Add the plugin marketplace
+/plugin marketplace add supermemoryai/claude-supermemory
+
+# Install the plugin
+/plugin install supermemory
+```
+
+<Note>
+**Migrating from the old `claude-supermemory` plugin name?** It was renamed to `supermemory` and will not update in place:
+
+```bash
+/plugin marketplace update supermemory-plugins
+/plugin install supermemory@supermemory-plugins
+# Only if the old plugin is still installed:
+/plugin uninstall claude-supermemory@supermemory-plugins
+```
+</Note>
+
+## Authenticate
+
+Start a Claude Code session and the plugin opens a browser login, then saves your sign-in to `~/.supermemory-claude/credentials.json`.
+
+Or create a Supermemory API key from the [API Keys](https://console.supermemory.ai/keys) page in the console and add it to your shell profile:
 
 <Tabs>
   <Tab title="macOS / Linux (zsh)">
@@ -44,74 +67,97 @@ Create a Supermemory API key from the [API Keys](https://console.supermemory.ai/
   </Tab>
 </Tabs>
 
-## Install the Plugin
-
-```bash
-# Add the plugin marketplace
-/plugin marketplace add supermemoryai/claude-supermemory
-
-# Install the plugin
-/plugin install claude-supermemory
-```
-
-## How It Works
+## How it works
 
 Once installed, the plugin runs automatically:
 
-- **Context Injection** — On session start, relevant memories are fetched and injected into Claude's context. This includes user preferences, project knowledge, and past interactions.
-- **Auto-Capture** — Tool usage is captured and stored during the session for future context.
-
-### What Gets Captured
-
-| Tool  | Captured As                                         |
-| ----- | --------------------------------------------------- |
-| Edit  | `Edited src/auth.ts: "old code..." → "new code..."` |
-| Write | `Created src/new-file.ts (500 chars)`               |
-| Bash  | `Ran: npm test (SUCCESS/FAILED)`                    |
-| Task  | `Spawned agent: explore codebase`                   |
+- **Session context** — At session start, profile facts for this project are loaded into context.
+- **Direct recall** — Before Claude sees each substantive prompt, the hook searches Supermemory and injects fresh matches. Set `recallDirective` to switch to advisory mode, where Claude decides when to search.
+- **Auto-capture** — After each Claude response (the Stop hook), conversation content added since the last save is captured in the background. On v5 the plugin sends the raw transcript and the server formats it.
+- **Shared repo memory** — Captures go to one repository container shared with the Codex, OpenCode, and Cursor plugins, tagged with `sm_scope: personal` metadata.
+- **MCP tools** — The hosted Supermemory MCP tools (`search_memory`, `add_memory`, and more) use the same credentials. They follow your Claude Code permission settings, so Claude asks before using one unless you've allowed it. For deeper history, Claude can also use the `context-gatherer` agent.
+- **Skipped sessions** — Print-mode runs (`claude -p`), GitHub Action runs, and turns that relay a background subagent's result make no Supermemory calls by default. Conductor and Vibe Kanban sessions are treated as interactive.
 
 ## Commands
 
-### /claude-supermemory:logout
-
-Log out from Supermemory and clear saved credentials.
-
-```
-/claude-supermemory:logout
-```
+| Command | Description |
+| --- | --- |
+| `/supermemory:index` | Index codebase architecture, conventions, and how to run it into the project container |
+| `/supermemory:status` | Show authentication status, API and MCP reachability, and the active project container |
 
 ## Configuration
 
-### Environment Variables
+### Environment variables
 
 ```bash
-SUPERMEMORY_CC_API_KEY=sm_...         # Required
-SUPERMEMORY_SKIP_TOOLS=Read,Glob,Grep # Tools to not capture (optional)
-SUPERMEMORY_DEBUG=true                # Enable debug logging (optional)
+SUPERMEMORY_CC_API_KEY=sm_...        # Optional: browser login is used when unset
+SUPERMEMORY_API_URL=...              # Optional: override the REST API base URL
+SUPERMEMORY_REPO_TAG=...             # Optional: override the project container
+SUPERMEMORY_ISOLATE_WORKTREES=true   # Optional: key the container on the worktree path
+SUPERMEMORY_DEBUG=true               # Optional: enable debug logging
 ```
 
-### Settings File
+### Global settings
 
 Create `~/.supermemory-claude/settings.json`:
 
 ```json
 {
-  "skipTools": ["Read", "Glob", "Grep", "TodoWrite"],
-  "captureTools": ["Edit", "Write", "Bash", "Task"],
-  "maxContextMemories": 10,
-  "maxProjectMemories": 20,
-  "debug": false
+  "maxProfileItems": 5,
+  "signalExtraction": true,
+  "signalKeywords": ["remember", "architecture", "decision", "bug", "fix"],
+  "signalTurnsBefore": 3,
+  "includeTools": ["Edit", "Write"]
 }
 ```
 
-## Next Steps
+| Option | Description |
+| --- | --- |
+| `maxProfileItems` | Max memories in context (default: 5) |
+| `recallDirective` | Override the built-in reasoned-recall instruction |
+| `signalExtraction` | Legacy API only: capture only important turns (default: false). On v5 the whole session is sent |
+| `signalKeywords` | Legacy API only: keywords that trigger capture |
+| `signalTurnsBefore` | Legacy API only: context turns before a signal (default: 3) |
+| `includeTools` | Legacy API only: tools to explicitly capture. On v5 every tool call and result is sent |
+| `captureSubagents` | Recall and capture on turns that relay a background subagent's result (default: false) |
+| `captureHeadless` | Load context, recall and capture in `claude -p` and GitHub Action runs (default: false) |
+| `captureOrchestrated` | Load context, recall and capture in Conductor and Vibe Kanban sessions (default: true) |
+| `dedupeOpeningPrompt` | Save a marker instead of an opening prompt (200+ characters) already captured from this machine for the same container in the last 24 hours (default: true) |
+| `dedupeRecallQueries` | Reuse another session's results for the same query and container from the last 10 minutes (default: true) |
+
+Each of the last five options can also be set with an environment variable, `SUPERMEMORY_CAPTURE_SUBAGENTS`, `SUPERMEMORY_CAPTURE_HEADLESS`, `SUPERMEMORY_CAPTURE_ORCHESTRATED`, `SUPERMEMORY_DEDUPE_OPENING_PROMPT` or `SUPERMEMORY_DEDUPE_RECALL_QUERIES`. Set it to `true` or `false`; it takes priority over `settings.json`.
+
+### Project config
+
+Per-repo overrides in `.claude/.supermemory-claude/config.json`. Create the file manually:
+
+```json
+{
+  "apiKey": "sm_...",
+  "baseUrl": "https://api.supermemory.ai",
+  "namespace": "my-team-project",
+  "signalExtraction": true
+}
+```
+
+| Option | Description |
+| --- | --- |
+| `apiKey` | Project-specific API key |
+| `baseUrl` | Supermemory API URL (use for self-hosted) |
+| `apiVersion` | `v5` or `legacy`. The hosted API uses v5; custom `baseUrl` values default to `legacy`. Set `v5` to use v5 with a self-hosted server 0.0.9 or newer |
+| `namespace` | Override the project container. Takes precedence over `repoContainerTag` |
+| `repoContainerTag` | Override the project container (checked before `SUPERMEMORY_REPO_TAG`) |
+
+API key precedence is `SUPERMEMORY_CC_API_KEY`, project `apiKey`, then `~/.supermemory-claude/credentials.json`.
+
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="GitHub Repository" icon="github" href="https://github.com/supermemoryai/claude-supermemory">
+  <Card title="GitHub repository" icon="/images/github-icon.svg" href="https://github.com/supermemoryai/claude-supermemory">
     Source code, issues, and detailed README.
   </Card>
 
-  <Card title="OpenClaw Plugin" icon="messages-square" href="/integrations/openclaw">
-    Multi-platform memory for Telegram, WhatsApp, Discord, and more.
+  <Card title="Cursor plugin" icon="/images/cursor-logo.svg" href="/integrations/cursor">
+    Memory for your Cursor chats.
   </Card>
 </CardGroup>

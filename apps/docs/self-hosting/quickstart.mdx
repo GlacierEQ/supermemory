@@ -1,0 +1,189 @@
+---
+title: "Self-hosting quickstart"
+sidebarTitle: "Quickstart"
+description: "From zero to your first memory in under two minutes."
+icon: "/icons/hugeicons/play.svg"
+---
+
+## Install
+
+<Tabs>
+<Tab title="curl">
+```bash
+curl -fsSL https://supermemory.ai/install | bash
+```
+</Tab>
+<Tab title="npx">
+```bash
+npx supermemory local
+```
+</Tab>
+<Tab title="bunx">
+```bash
+bunx supermemory local
+```
+</Tab>
+</Tabs>
+
+The installer detects your OS and architecture, downloads the right binary, verifies it, and (when run interactively) prompts you for an LLM API key. Supported platforms: macOS (Apple Silicon & Intel), Linux (x64 & arm64).
+
+### Pin or change versions
+
+Pass an explicit version to install (or roll back to) a specific release instead of `latest`:
+
+```bash
+curl -fsSL https://supermemory.ai/install | bash -s -- 0.0.3
+```
+
+<Warning>
+Before rolling back, back up your [data directory](#where-things-live). The installer replaces the binary, but an older server may not understand data or schema changes made by a newer release.
+</Warning>
+
+Release tags are `server-v<version>` on [GitHub Releases](https://github.com/supermemoryai/supermemory/releases) (for example [`server-v0.0.3`](https://github.com/supermemoryai/supermemory/releases/tag/server-v0.0.3)).
+
+To move to the newest release later:
+
+```bash
+supermemory-server upgrade
+```
+
+The binary may also print an “update available” notification on startup. If you intentionally pinned an older version (for example while debugging a regression), you can ignore that message until you are ready to upgrade.
+
+## Run
+
+```bash
+supermemory-server
+```
+
+First boot sets everything up — the embedded Supermemory graph engine, local embeddings, and your credentials:
+
+```
+╭───────────────────────────────────────────────────────────────╮
+│  → supermemory ready                                          │
+│                                                               │
+│    url         http://localhost:6767                          │
+│    database    encrypted local storage (~/.supermemory)       │
+│    embeddings  local · Xenova/bge-base-en-v1.5 · 768d         │
+│    workflow    rivet                                          │
+│    api key     sm_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx              │
+│    org id      xxxxxxxxxxxxxxxxxxxxxx                         │
+│    boot        4.2s                                           │
+╰───────────────────────────────────────────────────────────────╯
+  every request needs this key: Authorization: Bearer <api key>
+```
+
+Save that API key — it's your bearer token for every request.
+
+<Note>
+In production, Supermemory runs proprietary models tuned for long-horizon data understanding. Self-hosted, you bring any model: if no provider key is set, first boot launches an interactive setup wizard — pick a provider (OpenAI, Anthropic, Gemini, Groq, or any OpenAI-compatible endpoint like Ollama), paste your key, and it's saved encrypted for every future launch. After the LLM key, you can optionally pick an embedding model (press Enter to keep local `Xenova/bge-base-en-v1.5`). See [all providers](/self-hosting/configuration#llm-providers), [embeddings](/self-hosting/embeddings), and [fully-offline local models](/self-hosting/configuration#fully-offline-with-local-models).
+</Note>
+
+<Tip>
+**Docker / non-interactive:** set an LLM key via env and, if you don’t want local embeddings, set `SUPERMEMORY_EMBEDDING_PROVIDER` / `MODEL` / `DIMENSIONS`. There is no wizard without a TTY.
+</Tip>
+
+For the prebuilt Docker image, follow [Run Supermemory with Docker](/self-hosting/docker) for installation, authentication, backups, and upgrades.
+
+## Add your first memory
+
+<Note>
+The v5 SDKs (`supermemory` 5.x on npm and PyPI) need `supermemory-server` v0.0.9 or later. Older servers only speak v3/v4; run `supermemory-server upgrade` first.
+</Note>
+
+<Tabs>
+<Tab title="TypeScript">
+```typescript
+import { Supermemory } from "supermemory"
+
+const client = new Supermemory({
+  apiKey: "sm_...",
+  baseUrl: "http://localhost:6767",
+})
+
+await client.add("user_dhravya", {
+  content: "I'm Dhravya. I love building dev tools and I'm allergic to peanuts.",
+  dreaming: "instant",
+})
+```
+</Tab>
+<Tab title="Python">
+```python
+from supermemory import Supermemory
+
+client = Supermemory(
+    api_key="sm_...",
+    base_url="http://localhost:6767",
+)
+
+client.add(
+    "user_dhravya",
+    content="I'm Dhravya. I love building dev tools and I'm allergic to peanuts.",
+    dreaming="instant",
+)
+```
+</Tab>
+<Tab title="curl">
+```bash
+curl http://localhost:6767/ns/user_dhravya/document \
+  -H "Authorization: Bearer sm_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "I am Dhravya. I love building dev tools and I am allergic to peanuts.",
+    "dreaming": "instant"
+  }'
+```
+</Tab>
+</Tabs>
+
+## Search it
+
+<Tabs>
+<Tab title="TypeScript">
+```typescript
+const { results } = await client.search("user_dhravya", {
+  query: "what food should I avoid?",
+})
+```
+</Tab>
+<Tab title="Python">
+```python
+results = client.search("user_dhravya", query="what food should I avoid?")
+```
+</Tab>
+<Tab title="curl">
+```bash
+curl http://localhost:6767/ns/user_dhravya/search \
+  -H "Authorization: Bearer sm_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "what food should I avoid?"
+  }'
+```
+</Tab>
+</Tabs>
+
+That's it. Everything in the [Memory API](/quickstart) — documents, memories, user profiles, spaces, filtering — works identically against your local server.
+
+## Where things live
+
+By default, all state lives in a single directory you can back up or move:
+
+| Path | Contents |
+|---|---|
+| `~/.supermemory/` (or `$SUPERMEMORY_DATA_DIR`; `./.supermemory/` before v0.0.9) | The Supermemory graph engine's data, API key, auth secret, embedding model cache |
+| `~/.supermemory/env.enc` | Provider keys and embedding choices saved by the first-boot wizard, encrypted and loaded on every launch |
+| `~/.supermemory/env` | Plaintext API keys written by the installer. On launch, the server copies parsed values into `env.enc` before attempting to remove this file; it can remain if migration or removal fails |
+
+## Next steps
+
+<CardGroup cols={3}>
+  <Card title="Configuration" icon="/icons/hugeicons/settings-01.svg" href="/self-hosting/configuration">
+    LLM providers, local models, performance tuning
+  </Card>
+  <Card title="Embeddings" icon="/icons/hugeicons/route-02.svg" href="/self-hosting/embeddings">
+    Local default, OpenAI / Gemini / Ollama, multilingual
+  </Card>
+  <Card title="Memory API" icon="/icons/hugeicons/book-open-01.svg" href="/quickstart">
+    The full API — it all works against your local server
+  </Card>
+</CardGroup>

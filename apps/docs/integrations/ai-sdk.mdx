@@ -2,16 +2,16 @@
 title: "Vercel AI SDK"
 sidebarTitle: "Vercel AI SDK"
 description: "Use Supermemory with Vercel AI SDK for seamless memory management"
-icon: "triangle"
+icon: "/icons/hugeicons/triangle.svg"
 ---
+
+import MigrateCli from "/snippets/migrate-cli.mdx";
 
 The Supermemory AI SDK provides native integration with Vercel's AI SDK through two approaches: **User Profiles** for automatic personalization and **Memory Tools** for agent-based interactions.
 
-<Note>
-  Migrating to v2 from 1.4.x? Check the [migration guide](/migration/tools-v2-upgrade).
-</Note>
+<MigrateCli legacy="@supermemory/tools 2.x" guideHref="/migration/tools-v3-upgrade" guideLabel="3.0 upgrade guide" />
 
-<Card title="@supermemory/tools on npm" icon="npm" href="https://www.npmjs.com/package/@supermemory/tools">
+<Card title="@supermemory/tools on npm" icon="/icons/hugeicons/package.svg" href="https://www.npmjs.com/package/@supermemory/tools">
     Check out the NPM page for more details
 </Card>
 
@@ -21,7 +21,7 @@ The Supermemory AI SDK provides native integration with Vercel's AI SDK through 
 npm install @supermemory/tools
 ```
 
-## Quick Comparison
+## Quick comparison
 
 | Approach | Use Case | Setup |
 |----------|----------|-------|
@@ -30,9 +30,9 @@ npm install @supermemory/tools
 
 ---
 
-## User Profiles with Middleware
+## User profiles with middleware
 
-Automatically inject user profiles into every LLM call for instant personalization.
+Load the user profile once and reuse the same snapshot throughout the conversation.
 
 ```typescript
 import { generateText } from "ai"
@@ -40,8 +40,8 @@ import { withSupermemory } from "@supermemory/tools/ai-sdk"
 import { openai } from "@ai-sdk/openai"
 
 const modelWithMemory = withSupermemory(openai("gpt-5"), {
-  containerTag: "user-123",
-  customId: "conversation-456",
+  namespace: "user-123",
+  id: "conversation-456",
 })
 
 const result = await generateText({
@@ -50,46 +50,64 @@ const result = await generateText({
 })
 ```
 
+### Prompt caching
+
+Reuse the same wrapped model for every turn of a conversation. In `profile` and
+`full` modes, the profile is fetched on the first user turn and stays unchanged in
+the system prompt for the rest of the conversation. `query` and `full` modes attach
+each turn's search results to that turn's user message, and earlier turns keep their
+original results, so the prompt prefix stays the same as new messages are appended.
+
+Tool steps reuse their turn's memories without new requests. The profile is never
+refetched during a conversation; facts that change mid-conversation reach the model
+through each turn's search results.
+
+If retrieval fails or times out, the call continues without it by default, and the
+next user turn retries the profile. State lives in the wrapper, not in a global or
+cross-process cache, so create a new wrapper for each new conversation. Keep system
+instructions, tools and earlier messages stable too. Provider cache eligibility and
+minimum token counts still apply, so cache-hit savings are not guaranteed.
+
 ### Required fields
 
-Both `containerTag` and `customId` are required.
+Both `namespace` and `id` are required.
 
-- **`containerTag`** — *who* the memories belong to. Use a stable identifier per user, workspace, or tenant (e.g. `"user-123"`, `"acme-workspace"`). Memory search and writes are scoped to this tag.
-- **`customId`** — *which conversation* this turn belongs to. Use it to group messages from the same chat session into a single document (e.g. `"chat-2026-04-25"`, a thread ID, or a UUID per session).
+- **`namespace`** — *who* the memories belong to. Use a stable identifier per user, workspace, or tenant (e.g. `"user-123"`, `"acme-workspace"`). Memory search and writes are scoped to this tag.
+- **`id`** — *which conversation* this turn belongs to. Use it to group messages from the same chat session into a single document (e.g. `"chat-2026-04-25"`, a thread ID, or a UUID per session).
 
 <Note>
   **Memory saving is enabled by default** (`addMemory: "always"`). New conversations are persisted automatically. To opt out, set `addMemory: "never"`:
 
   ```typescript
   const modelWithMemory = withSupermemory(openai("gpt-5"), {
-    containerTag: "user-123",
-    customId: "conversation-456",
+    namespace: "user-123",
+    id: "conversation-456",
     addMemory: "never",
   })
   ```
 </Note>
 
-### Memory Search Modes
+### Memory search modes
 
 **Profile Mode (Default)** - Retrieves the user's complete profile:
 
 ```typescript
-const model = withSupermemory(openai("gpt-4"), { containerTag: "user-123", customId: "conv-1", mode: "profile" })
+const model = withSupermemory(openai("gpt-4"), { namespace: "user-123", id: "conv-1", mode: "profile" })
 ```
 
 **Query Mode** - Searches memories based on the user's message:
 
 ```typescript
-const model = withSupermemory(openai("gpt-4"), { containerTag: "user-123", customId: "conv-1", mode: "query" })
+const model = withSupermemory(openai("gpt-4"), { namespace: "user-123", id: "conv-1", mode: "query" })
 ```
 
 **Full Mode** - Combines profile AND query-based search:
 
 ```typescript
-const model = withSupermemory(openai("gpt-4"), { containerTag: "user-123", customId: "conv-1", mode: "full" })
+const model = withSupermemory(openai("gpt-4"), { namespace: "user-123", id: "conv-1", mode: "full" })
 ```
 
-### Custom Prompt Templates
+### Custom prompt templates
 
 Customize how memories are formatted. The template receives `userMemories`, `generalSearchMemories`, and `searchResults` (raw array for filtering by metadata):
 
@@ -108,19 +126,19 @@ const claudePrompt = (data: MemoryPromptData) => `
 `.trim()
 
 const model = withSupermemory(anthropic("claude-3-sonnet"), {
-  containerTag: "user-123",
-  customId: "conv-1",
+  namespace: "user-123",
+  id: "conv-1",
   mode: "full",
   promptTemplate: claudePrompt,
 })
 ```
 
-### Verbose Logging
+### Verbose logging
 
 ```typescript
 const model = withSupermemory(openai("gpt-4"), {
-  containerTag: "user-123",
-  customId: "conv-1",
+  namespace: "user-123",
+  id: "conv-1",
   verbose: true,
 })
 // Console output shows memory retrieval details
@@ -134,17 +152,29 @@ To **fail the call** when memory retrieval fails instead, set `skipMemoryOnError
 
 ```typescript
 const model = withSupermemory(openai("gpt-5"), {
-  containerTag: "user-123",
-  customId: "conv-1",
+  namespace: "user-123",
+  id: "conv-1",
   skipMemoryOnError: false,
+})
+```
+
+### Persisting tool calls (default: off)
+
+By default, saved conversations include only user and assistant text — tool calls and tool results are dropped, since tool payloads are often large and low-signal and would pollute memory extraction. To persist the full tool round trip (tool calls with their arguments, plus tool results, in their original order), set `includeToolCalls: true`:
+
+```typescript
+const model = withSupermemory(openai("gpt-5"), {
+  namespace: "user-123",
+  id: "conv-1",
+  includeToolCalls: true,
 })
 ```
 
 ---
 
-## Memory Tools
+## Memory tools
 
-Add memory capabilities to AI agents with search, add, and fetch operations.
+Add memory capabilities to AI agents. `supermemoryTools` returns seven tools: `searchMemories`, `addMemory`, `getProfile`, `documentList`, `documentAdd`, `documentDelete`, and `memoryForget`.
 
 ```typescript
 import { streamText } from "ai"
@@ -160,7 +190,7 @@ const result = await streamText({
 })
 ```
 
-### Available Tools
+### Available tools
 
 **Search Memories** - Semantic search through user memories:
 
@@ -184,7 +214,7 @@ const result = await streamText({
 // AI will call: addMemory({ memory: "User is allergic to peanuts" })
 ```
 
-### Using Individual Tools
+### Using individual tools
 
 For more control, import tools separately:
 
@@ -198,19 +228,19 @@ const result = await streamText({
   model: openai("gpt-5"),
   prompt: "What do you know about me?",
   tools: {
-    searchMemories: searchMemoriesTool("API_KEY", { projectId: "personal" }),
+    searchMemories: searchMemoriesTool("API_KEY", { namespace: "personal" }),
     createEvent: yourCustomTool,
   }
 })
 ```
 
-### Tool Results
+### Tool results
 
 ```typescript
 // searchMemories result
 { success: true, results: [...], count: 5 }
 
 // addMemory result
-{ success: true, memory: { id: "mem_123", ... } }
+{ success: true, memory: { id: "doc_123", status: "queued" } }
 ```
 

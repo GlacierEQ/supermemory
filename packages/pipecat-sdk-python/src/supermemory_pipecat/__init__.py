@@ -33,18 +33,21 @@ from .exceptions import (
     NetworkError,
     SupermemoryPipecatError,
 )
-from .service import SupermemoryPipecatService
+from .service import PLUGIN_VERSION, SupermemoryPipecatService
 from .utils import (
     deduplicate_memories,
     format_memories_to_text,
     get_last_user_message,
 )
 
-__version__ = "0.1.1"
+InputParams = SupermemoryPipecatService.InputParams
+
+__version__ = PLUGIN_VERSION
 
 __all__ = [
     # Main service
     "SupermemoryPipecatService",
+    "InputParams",
     # Exceptions
     "SupermemoryPipecatError",
     "ConfigurationError",

@@ -1,4 +1,5 @@
-import Supermemory from "supermemory"
+import { Supermemory } from "supermemory"
+import { version } from "../../package.json"
 
 /**
  * Normalizes a base URL by removing trailing slashes.
@@ -8,8 +9,20 @@ import Supermemory from "supermemory"
  */
 export const normalizeBaseUrl = (url?: string): string => {
 	const defaultUrl = "https://api.supermemory.ai"
-	if (!url) return defaultUrl
-	return url.endsWith("/") ? url.slice(0, -1) : url
+	const trimmed = url?.trim().replace(/\/+$/, "")
+	return trimmed || defaultUrl
+}
+
+export type SupermemorySource =
+	| "tools-ai-sdk"
+	| "tools-openai"
+	| "tools-mastra"
+	| "tools-voltagent"
+	| "tools-claude-memory"
+
+// The API attributes usage to the wrapper and release from these two headers.
+export function sourceHeaders(source: SupermemorySource) {
+	return { "x-sm-source": source, "x-sm-plugin-version": version }
 }
 
 /**
@@ -20,6 +33,8 @@ export interface CreateSupermemoryClientOptions {
 	apiKey: string
 	/** Optional custom base URL */
 	baseUrl?: string
+	/** Wrapper the requests come from, sent as `x-sm-source` */
+	source: SupermemorySource
 }
 
 /**
@@ -35,8 +50,9 @@ export function createSupermemoryClient(
 
 	return new Supermemory({
 		apiKey: options.apiKey,
+		headers: sourceHeaders(options.source),
 		...(normalizedBaseUrl !== "https://api.supermemory.ai"
-			? { baseURL: normalizedBaseUrl }
+			? { baseUrl: normalizedBaseUrl }
 			: {}),
 	})
 }

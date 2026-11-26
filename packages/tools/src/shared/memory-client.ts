@@ -1,4 +1,8 @@
-import { deduplicateMemories } from "../tools-shared"
+import {
+	deduplicateMemoriesForMode,
+	getMemoryText,
+	normalizeMemoryFact,
+} from "../tools-shared"
 import type {
 	Logger,
 	MemoryMode,
@@ -6,61 +10,68 @@ import type {
 	ProfileStructure,
 	PromptTemplate,
 } from "./types"
+import { SupermemoryError } from "supermemory"
+import { type SupermemorySource, createSupermemoryClient } from "./context"
 import {
 	convertProfileToMarkdown,
 	defaultPromptTemplate,
 } from "./prompt-builder"
 
-/**
- * Fetches profile and search results from the Supermemory API.
- *
- * @param containerTag - The container tag/user ID for scoping memories
- * @param queryText - Optional query text for semantic search
- * @param baseUrl - The API base URL
- * @param apiKey - The API key for authentication
- * @param signal - Optional AbortSignal to cancel the request (e.g. retrieval timeout)
- * @returns The profile structure with static, dynamic, and search results
- */
+function describeSupermemoryError(error: unknown): string {
+	if (error instanceof SupermemoryError && error.statusCode !== undefined) {
+		return `${error.statusCode}. ${error.message}`
+	}
+	return error instanceof Error ? error.message : String(error)
+}
+
+// Matches the v4 profile search defaults (memories mode, 0.6 threshold).
+export const PROFILE_SEARCH_THRESHOLD = 0.6
+
 export const supermemoryProfileSearch = async (
-	containerTag: string,
+	namespace: string,
 	queryText: string,
 	baseUrl: string,
 	apiKey: string,
+	source: SupermemorySource,
 	signal?: AbortSignal,
+	includeProfile = true,
 ): Promise<ProfileStructure> => {
-	const payload = queryText
-		? JSON.stringify({
-				q: queryText,
-				containerTag: containerTag,
-			})
-		: JSON.stringify({
-				containerTag: containerTag,
-			})
+	const client = createSupermemoryClient({ apiKey, baseUrl, source })
+	// No retries: this runs before the LLM call, and the raw v4 fetch never retried.
+	const requestOptions = {
+		maxRetries: 0,
+		...(signal && { abortSignal: signal }),
+	}
 
-	try {
-		const response = await fetch(`${baseUrl}/v4/profile`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${apiKey}`,
+	const [profileResponse, searchResponse] = await Promise.all([
+		includeProfile
+			? client.profile(namespace, undefined, requestOptions)
+			: undefined,
+		queryText
+			? client.search(
+					namespace,
+					{
+						query: queryText,
+						searchMode: "memories",
+						threshold: PROFILE_SEARCH_THRESHOLD,
+					},
+					requestOptions,
+				)
+			: undefined,
+	]).catch((error: unknown) => {
+		throw new Error(
+			`Supermemory profile search failed: ${describeSupermemoryError(error)}`,
+		)
+	})
+
+	return {
+		profile: profileResponse?.profile ?? { static: [], dynamic: [] },
+		...(searchResponse && {
+			searchResults: {
+				results: searchResponse.results,
+				timing: searchResponse.searchTime,
 			},
-			body: payload,
-			...(signal ? { signal } : {}),
-		})
-
-		if (!response.ok) {
-			const errorText = await response.text().catch(() => "Unknown error")
-			throw new Error(
-				`Supermemory profile search failed: ${response.status} ${response.statusText}. ${errorText}`,
-			)
-		}
-
-		return await response.json()
-	} catch (error) {
-		if (error instanceof Error) {
-			throw error
-		}
-		throw new Error(`Supermemory API request failed: ${error}`)
+		}),
 	}
 }
 
@@ -68,19 +79,21 @@ export const supermemoryProfileSearch = async (
  * Options for building memories text.
  */
 export interface BuildMemoriesTextOptions {
-	containerTag: string
+	namespace: string
 	queryText: string
 	mode: MemoryMode
 	baseUrl: string
 	apiKey: string
+	source: SupermemorySource
 	logger: Logger
 	promptTemplate?: PromptTemplate
 	signal?: AbortSignal
+	profile?: ProfileStructure["profile"] | Promise<ProfileStructure["profile"]>
 }
 
 /**
  * Fetches memories from the API, deduplicates them, and formats them into
- * the final string to be injected into the system prompt.
+ * the final memory block string.
  *
  * @param options - Configuration for building memories text
  * @returns The final formatted memories string ready for injection
@@ -89,29 +102,38 @@ export const buildMemoriesText = async (
 	options: BuildMemoriesTextOptions,
 ): Promise<string> => {
 	const {
-		containerTag,
+		namespace,
 		queryText,
 		mode,
 		baseUrl,
 		apiKey,
+		source,
 		logger,
 		promptTemplate = defaultPromptTemplate,
 		signal,
 	} = options
 
-	const memoriesResponse = await supermemoryProfileSearch(
-		containerTag,
-		queryText,
-		baseUrl,
-		apiKey,
-		signal,
-	)
+	const [memoriesResponse, profile] = await Promise.all([
+		supermemoryProfileSearch(
+			namespace,
+			queryText,
+			baseUrl,
+			apiKey,
+			source,
+			signal,
+			mode !== "query" && options.profile === undefined,
+		),
+		options.profile,
+	])
+	if (profile !== undefined) {
+		memoriesResponse.profile = profile
+	}
 
 	const memoryCountStatic = memoriesResponse.profile.static?.length || 0
 	const memoryCountDynamic = memoriesResponse.profile.dynamic?.length || 0
 
 	logger.info("Memory search completed", {
-		containerTag,
+		namespace,
 		memoryCountStatic,
 		memoryCountDynamic,
 		queryText:
@@ -119,10 +141,11 @@ export const buildMemoriesText = async (
 		mode,
 	})
 
-	const deduplicated = deduplicateMemories({
+	const rawSearchResults = memoriesResponse.searchResults?.results ?? []
+	const deduplicated = deduplicateMemoriesForMode(mode, {
 		static: memoriesResponse.profile.static,
 		dynamic: memoriesResponse.profile.dynamic,
-		searchResults: memoriesResponse.searchResults?.results,
+		searchResults: rawSearchResults,
 	})
 
 	logger.debug("Memory deduplication completed", {
@@ -151,16 +174,28 @@ export const buildMemoriesText = async (
 				})
 			: ""
 	const generalSearchMemories =
-		mode !== "profile"
+		mode !== "profile" && deduplicated.searchResults.length > 0
 			? `Search results for user's recent message: \n${deduplicated.searchResults
 					.map((memory) => `- ${memory}`)
 					.join("\n")}`
 			: ""
+	const visibleSearchKeys = new Set(
+		deduplicated.searchResults.map(normalizeMemoryFact),
+	)
+	const seenSearchKeys = new Set<string>()
+	const deduplicatedSearchResults = rawSearchResults.flatMap((result) => {
+		const memory = getMemoryText(result)
+		if (!memory) return []
+		const key = normalizeMemoryFact(memory)
+		if (!visibleSearchKeys.has(key) || seenSearchKeys.has(key)) return []
+		seenSearchKeys.add(key)
+		return [{ ...result, memory }]
+	})
 
 	const promptData: MemoryPromptData = {
 		userMemories,
 		generalSearchMemories,
-		searchResults: memoriesResponse.searchResults?.results ?? [],
+		searchResults: deduplicatedSearchResults,
 	}
 
 	const memories = promptTemplate(promptData)

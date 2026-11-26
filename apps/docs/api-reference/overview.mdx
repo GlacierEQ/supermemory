@@ -1,0 +1,70 @@
+---
+title: "API reference"
+description: "Interactive reference for the Supermemory HTTP API: ingest, search, profiles, memories, connectors and settings."
+icon: "/icons/hugeicons/plug-socket.svg"
+---
+
+<Warning>
+This is the legacy v3/v4 reference. v3 and v4 are deprecated and will be shut down on **December 31, 2026**. Move to [v5](/v5/api-reference/overview) before then. The [migration guide](/migration/api-v5) maps every legacy call to its v5 equivalent.
+</Warning>
+
+This is the **contract-level** reference for Supermemory: methods, paths, parameters, and the playground.
+
+For narrative guides (when to use what, patterns, SDKs), start with the [Quickstart](/quickstart) and [Using supermemory](/ingestion/add-memories).
+
+## Base URL
+
+```
+https://api.supermemory.ai
+```
+
+Self-hosted: use your instance URL (for example `http://localhost:6767`). See [Self-hosting](/self-hosting/overview).
+
+## Authentication
+
+All endpoints use a Bearer API key. Create one in the [developer console](https://console.supermemory.ai).
+
+```bash
+Authorization: Bearer sm_...
+```
+
+Details: [API keys & auth](/authentication).
+
+## Mental model
+
+| Group | What it does |
+| --- | --- |
+| **Ingest** | Add documents, files, batches, and conversations into the pipeline |
+| **Documents** | Get status, list, update, delete, chunks, and file URLs |
+| **Search** | Semantic recall — memories, documents, or hybrid |
+| **Profiles** | Static + dynamic facts for a container (user / entity) |
+| **Memories** | Create, list, update, and forget extracted memory entries |
+| **Container tags** | Multi-tenant settings, merge, and delete for a container |
+| **Connections** | OAuth connectors (Drive, Notion, Gmail, …) and sync |
+| **Settings** | Org-level customization, buckets, and reset |
+
+Same `containerTag` scopes ingest, search, and profiles — one engine, multiple ways out.
+
+## Suggested order
+
+1. **Ingest** — `POST /v3/documents` (SDK: `client.add`)
+2. **Documents** — `GET /v3/documents/{id}` until `status: "done"` for searchable content, and `dreamingStatus: "done"` before you read memories or profiles
+3. **Search** — `POST /v4/search`
+4. **Profiles** — `POST /v4/profile`
+
+Full walkthrough with conversation + document examples: [Quickstart](/quickstart).
+
+## SDKs
+
+The current `supermemory` SDKs (5.x) call the [v5 API](/v5/api-reference/overview), not these endpoints. To call v3/v4 through an SDK, pin a release from before 5.0.0:
+
+- TypeScript: `npm install supermemory@4`
+- Python: `pip install "supermemory<5"`
+
+See [Supermemory SDK](/integrations/supermemory-sdk).
+
+The API's OpenAPI generator supplies **TypeScript / Python SDK** samples via `x-codeSamples`, plus cURL. On this legacy reference they use the pre-5 SDK methods. Playground snippets use the deployed spec, so their availability depends on the API version serving it.
+
+## OpenAPI
+
+Spec (live): [https://api.supermemory.ai/v3/openapi](https://api.supermemory.ai/v3/openapi)

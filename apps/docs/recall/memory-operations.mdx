@@ -1,0 +1,192 @@
+---
+title: "Memory Operations"
+sidebarTitle: "CRUD & Forgetting"
+description: "Forget extracted memories exactly or by meaning"
+icon: "/icons/hugeicons/database-01.svg"
+---
+
+<Info>
+These operations act on extracted memories (not raw documents). Every call is scoped to one `namespace` (what v3/v4 called a container tag).
+
+For document management (list, get, update, delete), see [Document Operations](/ingestion/document-operations).
+For ingesting raw content (text, files, URLs) through the processing pipeline, see [Add Context](/ingestion/add-memories).
+</Info>
+
+## Create memories
+
+v5 has no direct memory-create route. Ingest a document instead and Supermemory extracts the memories from it. When you already know the exact facts, send them as short statements with `dreaming: "instant"` so they are searchable right away.
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    await supermemory.add("user_123", {
+      content: "John prefers dark mode.\nJohn is from Seattle.",
+      id: "prefs_john",
+      metadata: { source: "user_preference" },
+      dreaming: "instant",
+    });
+    ```
+  </Tab>
+  <Tab title="cURL">
+    ```bash
+    curl -X POST "https://api.supermemory.ai/ns/user_123/document" \
+      -H "Authorization: Bearer $SUPERMEMORY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "content": "John prefers dark mode.\nJohn is from Seattle.",
+        "id": "prefs_john",
+        "metadata": { "source": "user_preference" },
+        "dreaming": "instant"
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+Reusing the same `id` later appends to that document instead of creating a new one. See [Updating Content](/ingestion/add-memories#updating-content).
+
+---
+
+## Forget Memories
+
+Soft-delete memories by ID. Forgotten memories are excluded from search results but preserved. Pass 1 to 500 IDs.
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    const { count, matches, errors } = await supermemory.memories.forget("user_123", {
+      ids: ["mem_abc123"],
+    });
+    ```
+  </Tab>
+  <Tab title="cURL">
+    ```bash
+    curl -X DELETE "https://api.supermemory.ai/ns/user_123/memories" \
+      -H "Authorization: Bearer $SUPERMEMORY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{ "ids": ["mem_abc123"] }'
+    ```
+  </Tab>
+</Tabs>
+
+### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `namespace` | string | yes | Namespace the memories belong to (URL path) |
+| `ids` | string[] | yes | Memory IDs to forget (1 to 500) |
+
+### Response
+
+```json
+{
+  "count": 1,
+  "matches": [{ "id": "mem_abc123", "memory": "John prefers dark mode" }],
+  "errors": []
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `count` | number | Number of memories forgotten; always equals `matches.length` |
+| `matches` | array | The memories that were forgotten (`{ id, memory }`) |
+| `errors` | array | IDs that were missing, already forgotten, or in another namespace (`{ id, error }`) |
+
+HTTP success does not imply every requested ID changed. Check `errors`.
+
+---
+
+## Forget matching
+
+Forget by meaning. Give a `query` (a prompt or topic) and the service semantically searches the namespace, decides which memories are genuinely about your target, and soft-deletes those — use this for "forget everything about X".
+
+<Warning>
+This is a bulk, destructive operation. `dryRun` is required. Call with **`dryRun: true`** first to review what would be forgotten, then apply. The match is semantic, so a too-broad query can select more than you intend. Each request selects at most 100 memories. After applying a batch, repeat the preview-and-apply workflow to find more; repeated previews alone do not paginate and may return the same matches.
+</Warning>
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    // 1) Preview
+    const preview = await supermemory.memories.forgetMatching("user_123", {
+      query: "forget everything about Project Titan",
+      dryRun: true,
+    });
+    // preview.matches → [{ id, memory }, ...]
+
+    // 2) Apply — pass the ids from the preview to forget exactly that set
+    const result = await supermemory.memories.forget("user_123", {
+      ids: preview.matches.map((m) => m.id),
+    });
+    // result.matches → [{ id, memory }, ...]
+    ```
+  </Tab>
+  <Tab title="cURL">
+    ```bash
+    # Preview
+    curl -X DELETE "https://api.supermemory.ai/ns/user_123/memories/semantic" \
+      -H "Authorization: Bearer $SUPERMEMORY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "query": "forget everything about Project Titan",
+        "dryRun": true
+      }'
+
+    # Apply — pass the ids from the preview to forget exactly that set
+    curl -X DELETE "https://api.supermemory.ai/ns/user_123/memories" \
+      -H "Authorization: Bearer $SUPERMEMORY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{ "ids": ["abc123", "def456", "ghi789"] }'
+    ```
+  </Tab>
+</Tabs>
+
+### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `namespace` | string | yes | Namespace to scope the operation to (URL path) |
+| `query` | string | yes | What to forget — a natural-language instruction ("forget everything about Project Titan") or a bare topic ("Project Titan"). 1 to 2000 characters |
+| `dryRun` | boolean | yes | `true` returns what *would* be forgotten without changing anything. `false` forgets the memories selected when that request runs |
+
+### Response
+
+Both dry-run and applied requests return the same shape as [Forget Memories](#forget-memories):
+
+```json
+{
+  "count": 3,
+  "matches": [
+    { "id": "mem_1", "memory": "Project Titan ships in Q3" }
+  ],
+  "errors": []
+}
+```
+
+`errors` is always empty for semantic requests. The payload does not say which mode was sent, so keep your own record of `dryRun` next to audit logs.
+
+<Tip>
+**Exact, bound deletes.** Re-running `forgetMatching` with `dryRun: false` re-runs the semantic match, so the result can drift from the preview if the namespace changed in between. To forget *precisely* what you reviewed, take the `id`s from the `dryRun` preview and send them to `memories.forget` — the delete is then bound to exactly that set.
+</Tip>
+
+---
+
+## Update Memory
+
+v5 has no direct memory-update route. Update the source document instead; Supermemory reprocesses it and the memories follow.
+
+```typescript
+await supermemory.documents.update("user_123", "prefs_john", {
+  content: "John prefers light mode.\nJohn is from Seattle.",
+});
+```
+
+See [Update Document](/ingestion/document-operations#update-document).
+
+---
+
+## Next steps
+
+- [Review Inferred Memories](/recall/memory-review) — Approve or decline low-confidence memories
+- [Document Operations](/ingestion/document-operations) — Manage documents
+- [Search](/recall/search) — Query your memories
+- [Ingesting Content](/ingestion/add-memories) — Add new content

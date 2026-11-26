@@ -275,6 +275,9 @@ export const ListMemoriesQuerySchema = z
 			.regex(/^\d+$/)
 			.or(z.number())
 			.transform(Number)
+			.refine((value) => Number.isInteger(value) && value >= 1, {
+				message: "Limit must be a positive integer",
+			})
 			.refine((value) => value <= 1100, {
 				message: "Limit cannot be greater than 1100",
 			})
@@ -292,6 +295,9 @@ export const ListMemoriesQuerySchema = z
 			.regex(/^\d+$/)
 			.or(z.number())
 			.transform(Number)
+			.refine((value) => Number.isInteger(value) && value >= 1, {
+				message: "Page must be a positive integer",
+			})
 			.default("1")
 			.openapi({ description: "Page number to fetch", example: "1" }),
 		sort: z
@@ -346,14 +352,13 @@ export const SearchRequestSchema = z.object({
 		.number()
 		.optional()
 		.default(0)
-		.refine((v) => v === undefined || (v >= 0 && v <= 1), {
+		.refine((v) => v >= 0 && v <= 1, {
 			message: "chunkThreshold must be between 0 and 1",
 			params: {
 				max: 1,
 				min: 0,
 			},
 		})
-		.transform(Number)
 		.openapi({
 			description:
 				"Threshold / sensitivity for chunk selection. 0 is least sensitive (returns most chunks, more results), 1 is most sensitive (returns lesser chunks, accurate results)",
@@ -378,14 +383,13 @@ export const SearchRequestSchema = z.object({
 		.number()
 		.optional()
 		.default(0)
-		.refine((v) => v === undefined || (v >= 0 && v <= 1), {
+		.refine((v) => v >= 0 && v <= 1, {
 			message: "documentThreshold must be between 0 and 1",
 			params: {
 				max: 1,
 				min: 0,
 			},
 		})
-		.transform(Number)
 		.openapi({
 			description:
 				"Threshold / sensitivity for document selection. 0 is least sensitive (returns most documents, more results), 1 is most sensitive (returns lesser documents, accurate results)",
@@ -473,14 +477,13 @@ export const Searchv4RequestSchema = z.object({
 		.number()
 		.optional()
 		.default(0.6)
-		.refine((v) => v === undefined || (v >= 0 && v <= 1), {
+		.refine((v) => v >= 0 && v <= 1, {
 			message: "documentThreshold must be between 0 and 1",
 			params: {
 				max: 1,
 				min: 0,
 			},
 		})
-		.transform(Number)
 		.openapi({
 			description:
 				"Threshold / sensitivity for memories selection. 0 is least sensitive (returns most memories, more results), 1 is most sensitive (returns lesser memories, accurate results)",
@@ -804,7 +807,7 @@ export const SettingsRequestSchema = OrganizationSettingsSchema.omit({
 	id: true,
 	orgId: true,
 	updatedAt: true,
-})
+}).partial()
 
 export const ConnectionResponseSchema = z.object({
 	createdAt: z.string().datetime(),
@@ -1095,12 +1098,12 @@ export const DocumentsWithMemoriesResponseSchema = z
 
 export const DocumentsWithMemoriesQuerySchema = z
 	.object({
-		page: z.number().default(1).openapi({
+		page: z.number().int().min(1).default(1).openapi({
 			description: "Page number to fetch",
 			example: 1,
 		}),
-		limit: z.number().default(10).openapi({
-			description: "Number of items per page",
+		limit: z.number().int().min(1).max(1000).default(10).openapi({
+			description: "Number of items per page (max 1000)",
 			example: 10,
 		}),
 		sort: z.enum(["createdAt", "updatedAt"]).default("createdAt").openapi({
@@ -1117,6 +1120,13 @@ export const DocumentsWithMemoriesQuerySchema = z
 			.openapi({
 				description: "Optional container tags to filter documents by",
 				example: ["sm_project_default"],
+			}),
+		sources: z
+			.array(z.string().trim().min(1).max(255))
+			.optional()
+			.openapi({
+				description: "Optional document sources to filter by (OR logic)",
+				example: ["claude-code", "codex"],
 			}),
 	})
 	.openapi({
@@ -1399,12 +1409,13 @@ export const BulkDeleteMemoriesSchema = z
 				example: ["acxV5LHMEsG2hMSNb4umbn", "bxcV5LHMEsG2hMSNb4umbn"],
 			}),
 		containerTags: z
-			.array(z.string())
+			.array(z.string().max(256))
 			.min(1)
+			.max(100)
 			.optional()
 			.openapi({
 				description:
-					"Array of container tags - all memories in these containers will be deleted",
+					"Array of container tags - all memories in these containers will be deleted (max 100 at once)",
 				example: ["user_123", "project_123"],
 			}),
 	})
@@ -1495,6 +1506,10 @@ export const ContainerTagListTypeSchema = z
 		isNova: z.boolean().openapi({
 			description: "True if containerTag starts with 'sm_project_'",
 			example: true,
+		}),
+		visibility: z.enum(["public", "private", "unlisted"]).optional().openapi({
+			description: "Space visibility (company brain spaces)",
+			example: "public",
 		}),
 	})
 	.openapi({

@@ -12,14 +12,27 @@ export { ViewportState } from "./canvas/viewport"
 export { SpatialIndex } from "./canvas/hit-test"
 export { VersionChainIndex } from "./canvas/version-chain"
 
+export { graphPageToDocuments } from "./graph-page"
+
 // Constants
-export { DEFAULT_COLORS, FORCE_CONFIG, GRAPH_SETTINGS } from "./constants"
+export {
+	DEFAULT_COLORS,
+	DEFAULT_HOVER_POPOVER_Z_INDEX,
+	DEFAULT_LABELS,
+	FORCE_CONFIG,
+	GRAPH_SETTINGS,
+} from "./constants"
 
 // Types
 export type {
 	MemoryGraphProps,
+	MemoryGraphLabels,
+	MemoryGraphLayering,
+	GraphAppearance,
+	ResolvedMemoryGraphLabels,
 	GraphNode,
 	GraphEdge,
+	GraphEdgeType,
 	GraphThemeColors,
 	GraphCanvasProps,
 	GraphApiDocument,
@@ -30,10 +43,13 @@ export type {
 	ChainEntry,
 } from "./types"
 
-// Backward-compatible API types
+// API types
 export type {
 	DocumentWithMemories,
 	MemoryEntry,
-	DocumentsResponse,
+	GraphPage,
+	GraphPageDocumentNode,
+	GraphPageEdge,
+	GraphPageMemoryNode,
 	MemoryRelation,
 } from "./api-types"

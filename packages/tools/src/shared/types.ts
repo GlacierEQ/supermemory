@@ -1,3 +1,5 @@
+import type { SearchResponseResultsItem } from "supermemory"
+
 /**
  * Data provided to the prompt template function for customizing memory injection.
  */
@@ -5,25 +7,48 @@ export interface MemoryPromptData {
 	/**
 	 * Pre-formatted markdown combining static and dynamic profile memories.
 	 * Contains core user facts (name, preferences, goals) and recent context (projects, interests).
+	 * Set only for the profile block, which goes in the system prompt; empty in search blocks.
 	 */
 	userMemories: string
 	/**
 	 * Pre-formatted search results text for the current query.
 	 * Contains memories retrieved based on semantic similarity to the conversation.
-	 * Empty string if mode is "profile" only.
+	 * Set only for search blocks, which go on the user message; empty in the profile block.
 	 */
 	generalSearchMemories: string
 	/**
-	 * Raw search results from the API for the current query.
-	 * Use this to traverse, filter, or selectively include results based on metadata.
-	 * Empty array if mode is "profile" or when no search was performed.
+	 * Metadata-preserving search results that remain after cross-source deduplication.
+	 * Use this to traverse, filter, or selectively include visible results.
+	 * The runtime always supplies an array (empty in profile mode or when no search
+	 * was performed).
 	 */
-	searchResults: Array<{ memory: string; metadata?: Record<string, unknown> }>
+	searchResults: MemorySearchResult[]
+}
+
+/** A raw v5 search result, as returned by `search(namespace)`. */
+export type ProfileSearchResult = SearchResponseResultsItem
+
+/** One profile memory, as returned by `profile(namespace)`. */
+export interface ProfileEntry {
+	id: string
+	memory: string
+}
+
+/** A visible, deduplicated query result provided to prompt templates. */
+export interface MemorySearchResult
+	extends Omit<ProfileSearchResult, "memory"> {
+	memory: string
 }
 
 /**
  * Function type for customizing the memory prompt injection.
- * Return the full string to be injected into the system prompt.
+ * Return the full string to inject as a memory block. Every wrapper places memories the same way:
+ * - The profile block (`userMemories` set, `generalSearchMemories` empty) goes in the system
+ *   prompt. It is fetched once per conversation and stays byte-identical on every call.
+ * - Each search block (`generalSearchMemories` set, `userMemories` empty) is appended to the
+ *   user message it was retrieved for, and earlier messages keep the block they first received.
+ *
+ * The template is called separately for each block, so the profile never appears twice.
  *
  * @example
  * ```typescript
@@ -41,9 +66,11 @@ export type PromptTemplate = (data: MemoryPromptData) => string
 
 /**
  * Memory retrieval mode:
- * - "profile": Retrieves user profile memories (static + dynamic) without query filtering
- * - "query": Searches memories based on semantic similarity to the user's message
- * - "full": Combines both profile and query-based results
+ * - "profile": The user profile (static + dynamic), fetched once per conversation, in the system prompt
+ * - "query": Search results for each user message, appended to that message
+ * - "full": Both: the profile once in the system prompt, plus per-message search results
+ *
+ * A failed or timed-out fetch is retried on the next user message.
  */
 export type MemoryMode = "profile" | "query" | "full"
 
@@ -64,28 +91,20 @@ export interface Logger {
 	error: (message: string, data?: unknown) => void
 }
 
-/**
- * Response structure from the Supermemory profile API.
- */
+/** v5 profile plus an optional memories search for the current query. */
 export interface ProfileStructure {
 	profile: {
-		/**
-		 * Core, stable facts about the user that rarely change.
-		 * Examples: name, profession, long-term preferences, goals.
-		 */
-		static?: Array<{ memory: string; metadata?: Record<string, unknown> }>
-		/**
-		 * Recently learned or frequently updated information about the user.
-		 * Examples: current projects, recent interests, ongoing topics.
-		 */
-		dynamic?: Array<{ memory: string; metadata?: Record<string, unknown> }>
+		/** Core, stable facts (name, profession, long-term preferences). */
+		static?: ProfileEntry[]
+		/** Recently learned or frequently updated context. */
+		dynamic?: ProfileEntry[]
+		/** Memories grouped by custom profile bucket. */
+		buckets?: Record<string, ProfileEntry[]>
 	}
-	searchResults: {
-		/**
-		 * Memories retrieved based on semantic similarity to the current query.
-		 * Most relevant to the immediate conversation context.
-		 */
-		results: Array<{ memory: string; metadata?: Record<string, unknown> }>
+	searchResults?: {
+		results: ProfileSearchResult[]
+		/** Server-side search duration in milliseconds. */
+		timing: number
 	}
 }
 
@@ -99,7 +118,7 @@ export interface ProfileMarkdownData {
 		/** Recently learned or updated information (current projects, interests) */
 		dynamic?: string[]
 	}
-	searchResults: {
+	searchResults?: {
 		/** Query-relevant memories based on semantic similarity */
 		results: Array<{ memory: string }>
 	}
@@ -115,12 +134,12 @@ export interface SupermemoryBaseOptions {
 	baseUrl?: string
 	/** Optional conversation/thread ID to group messages for contextual memory generation */
 	threadId?: string
-	/** Memory retrieval mode */
+	/** Memory retrieval mode (default: "profile"); see {@link MemoryMode} for where each block goes */
 	mode?: MemoryMode
 	/** Memory persistence mode */
 	addMemory?: AddMemoryMode
 	/** Enable detailed logging of memory search and injection */
 	verbose?: boolean
-	/** Custom function to format memory data into the system prompt */
+	/** Custom function to format the profile block and each search block; see {@link PromptTemplate} */
 	promptTemplate?: PromptTemplate
 }

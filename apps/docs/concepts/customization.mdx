@@ -1,21 +1,20 @@
 ---
-title: "Customizing for Your Use Case"
-sidebarTitle: "Customization"
+title: "Customizing for your use case"
+sidebarTitle: "Customizing"
 description: "Configure Supermemory's behavior for your specific application"
-icon: "settings-2"
+icon: "/icons/hugeicons/settings-02.svg"
 ---
 
 Configure how Supermemory processes and retrieves content for your specific use case.
 
-## Filter Prompts
+## Organizational Context
 
-Tell Supermemory what content matters during ingestion. This helps filter and prioritize what gets indexed.
+Tell Supermemory what your organization does and what content matters during ingestion. This steers what gets extracted into memories across every namespace. In v3/v4 this field was called `filterPrompt`.
 
 ```typescript
 // Example: Brand guidelines assistant
-await client.settings.update({
-  shouldLLMFilter: true,
-  filterPrompt: `You are ingesting content for Brand.ai's brand guidelines system.
+await supermemory.organization.update({
+  organizationalContext: `You are ingesting content for Brand.ai's brand guidelines system.
 
     Index:
     - Official brand values and mission statements
@@ -27,82 +26,87 @@ await client.settings.update({
     - Draft documents and work-in-progress
     - Outdated brand materials (pre-2024)
     - Internal discussions about brand changes
-    - Competitor analysis docs`
+    - Competitor analysis docs`,
 });
 ```
 
 <AccordionGroup>
-  <Accordion title="Personal Assistant">
+  <Accordion title="Personal assistant">
     ```typescript
-    filterPrompt: `Personal AI assistant. Prioritize recent content, action items,
+    organizationalContext: `Personal AI assistant. Prioritize recent content, action items,
     and personal context. Exclude spam and duplicates.`
     ```
   </Accordion>
-  <Accordion title="Customer Support">
+  <Accordion title="Customer support">
     ```typescript
-    filterPrompt: `Customer support agent. Prioritize verified solutions, official docs,
+    organizationalContext: `Customer support agent. Prioritize verified solutions, official docs,
     and resolved tickets. Exclude internal discussions and PII.`
     ```
   </Accordion>
-  <Accordion title="Legal Assistant">
+  <Accordion title="Legal assistant">
     ```typescript
-    filterPrompt: `Legal research assistant. Prioritize precedents, current regulations,
+    organizationalContext: `Legal research assistant. Prioritize precedents, current regulations,
     and approved contract language. Exclude privileged communications.`
     ```
   </Accordion>
-  <Accordion title="Finance Agent">
+  <Accordion title="Finance agent">
     ```typescript
-    filterPrompt: `Financial analysis assistant. Prioritize latest reports, verified data,
+    organizationalContext: `Financial analysis assistant. Prioritize latest reports, verified data,
     and regulatory filings. Exclude speculative data and MNPI.`
     ```
   </Accordion>
   <Accordion title="Healthcare">
     ```typescript
-    filterPrompt: `Healthcare information assistant. Prioritize evidence-based guidelines
+    organizationalContext: `Healthcare information assistant. Prioritize evidence-based guidelines
     and FDA-approved info. Exclude PHI and outdated recommendations.`
     ```
   </Accordion>
-  <Accordion title="Developer Docs">
+  <Accordion title="Developer docs">
     ```typescript
-    filterPrompt: `Developer documentation assistant. Prioritize current APIs, working
+    organizationalContext: `Developer documentation assistant. Prioritize current APIs, working
     examples, and best practices. Exclude deprecated APIs and test fixtures.`
     ```
   </Accordion>
 </AccordionGroup>
 
+The value replaces the existing context in full. Send `null` to clear it. The legacy `shouldLLMFilter`, `categories`, `includeItems`, and `excludeItems` settings are not part of the v5 organization resource.
+
 ---
 
-## Entity Context
+## Supporting Context
 
-Guide memory extraction for a specific container tag. Filter prompts are org-wide; entity context is per container.
+Guide memory extraction for a specific namespace. Organizational context is org-wide; supporting context is per namespace. In v3/v4 this field was called `entityContext`.
 
 ```typescript
-await client.add({
+await supermemory.add("session_abc123", {
   content: "User asked about logo variations for dark backgrounds...",
-  containerTag: "session_abc123",
-  entityContext: `Design exploration conversation between john@acme.com and Brand.ai assistant.
-    Focus on John's design preferences and brand requirements.`
+  supportingContext: `Design exploration conversation between john@acme.com and Brand.ai assistant.
+    Focus on John's design preferences and brand requirements.`,
 });
 ```
 
-<Accordion title="Update entity context only">
-  Update entity context for a container tag without uploading content.
+<Accordion title="Update supporting context only">
+  Set the supporting context for a namespace without uploading content.
 
   ```typescript
-  await client.containerTags.update("session_abc123", {
-    entityContext: `Design exploration conversation between john@acme.com and Brand.ai assistant.
-      Focus on John's design preferences and brand requirements.`
+  await supermemory.namespaces.update("session_abc123", {
+    supportingContext: `Design exploration conversation between john@acme.com and Brand.ai assistant.
+      Focus on John's design preferences and brand requirements.`,
   });
   ```
 </Accordion>
 
 <Note>
-Entity context persists on the container tag and combines with org-level filter prompts.
+Supporting context persists on the namespace and combines with the org-level organizational context.
 </Note>
 
 ---
 
-## Chunk Size
+<Note>
+The Chunk size and Connector branding sections below use the legacy settings resource. Their `client.settings.update(...)` examples require a legacy SDK that exposes `settings`; SDK 5.x users should call `PATCH /v3/settings` directly with an org admin or owner credential. These options are not fields on the v5 organization resource.
+</Note>
+
+## Chunk size
 
 Control how documents are split into searchable pieces. Smaller chunks = more precise retrieval but less context per result.
 
@@ -125,14 +129,14 @@ Smaller chunks generate more memories per document. Larger chunks provide more c
 
 ---
 
-## Connector Branding
+## Connector branding
 
 Show "Log in to **YourApp**" instead of "Log in to Supermemory" when users connect external services. See [Connectors Overview](/connectors/overview) for the full list of supported integrations.
 
 <AccordionGroup>
   <Accordion title="Google Drive">
     1. Create OAuth credentials in [Google Cloud Console](https://console.cloud.google.com/)
-    2. Redirect URI: `https://api.supermemory.ai/v3/connections/google-drive/callback`
+    2. Redirect URI: `https://api.supermemory.ai/v3/connections/auth/callback/google-drive`
 
     ```typescript
     await client.settings.update({
@@ -144,7 +148,7 @@ Show "Log in to **YourApp**" instead of "Log in to Supermemory" when users conne
   </Accordion>
   <Accordion title="Notion">
     1. Create integration at [Notion Developers](https://developers.notion.com/)
-    2. Redirect URI: `https://api.supermemory.ai/v3/connections/notion/callback`
+    2. Redirect URI: `https://api.supermemory.ai/v3/connections/auth/callback/notion`
 
     ```typescript
     await client.settings.update({
@@ -156,7 +160,7 @@ Show "Log in to **YourApp**" instead of "Log in to Supermemory" when users conne
   </Accordion>
   <Accordion title="OneDrive">
     1. Register app in [Azure Portal](https://portal.azure.com/)
-    2. Redirect URI: `https://api.supermemory.ai/v3/connections/onedrive/callback`
+    2. Redirect URI: `https://api.supermemory.ai/v3/connections/auth/callback/onedrive`
 
     ```typescript
     await client.settings.update({
@@ -168,35 +172,41 @@ Show "Log in to **YourApp**" instead of "Log in to Supermemory" when users conne
   </Accordion>
 </AccordionGroup>
 
----
-
-## API Reference
-
-```typescript
-// Get current settings
-const settings = await client.settings.get();
-
-// Update settings
-await client.settings.update({
-  shouldLLMFilter: true,
-  filterPrompt: "...",
-  chunkSize: 512
-});
-```
-
 <Note>
-Settings are organization-wide. Changes apply to new content only—existing memories aren't reprocessed.
+Client secrets are write-only. `GET /v3/settings` and the `PATCH /v3/settings` response return each connector's client ID and `*CustomKeyEnabled` flag, but never its client secret.
 </Note>
 
 ---
 
-## Next Steps
+## API reference
+
+```typescript
+// Read organization settings
+const { organizationalContext, namespaceCount } = await supermemory.organization.get();
+
+// Update organization context
+await supermemory.organization.update({ organizationalContext: "..." });
+
+// Read and update one namespace
+const ns = await supermemory.namespaces.get("session_abc123");
+await supermemory.namespaces.update("session_abc123", {
+  supportingContext: "...",
+});
+```
+
+<Note>
+Organization settings are organization-wide and require an organization administrator. Changes apply to new content only—existing memories aren't reprocessed.
+</Note>
+
+---
+
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Add Memories" icon="plus" href="/add-memories">
+  <Card title="Add memories" icon="/icons/hugeicons/plus-sign.svg" href="/ingestion/add-memories">
     See your custom settings in action
   </Card>
-  <Card title="Connectors" icon="plug" href="/connectors/overview">
+  <Card title="Connectors" icon="/icons/hugeicons/plug-01.svg" href="/connectors/overview">
     Set up automatic syncing from external platforms
   </Card>
 </CardGroup>

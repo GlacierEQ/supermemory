@@ -1,18 +1,39 @@
 ---
-title: "OpenAI Codex"
-sidebarTitle: "OpenAI Codex"
-description: "codex-supermemory — persistent memory for OpenAI Codex CLI"
-icon: "terminal"
+title: "Codex"
+sidebarTitle: "Codex"
+description: "Persistent memory for the OpenAI Codex CLI with the codex-supermemory plugin."
+icon: "/images/codex.svg"
 ---
 
-[codex-supermemory](https://github.com/supermemoryai/codex-supermemory) wires Supermemory into the [OpenAI Codex CLI](https://github.com/openai/codex) via hooks and skills. Your agent gets **two layers of memory**:
+[codex-supermemory](https://github.com/supermemoryai/codex-supermemory) wires Supermemory into the [OpenAI Codex CLI](https://github.com/openai/codex) via hooks and the hosted Supermemory MCP server. Your agent gets **two layers of memory**:
 
-- **Implicit** (hooks) — automatically recalls context before each prompt and captures conversations after each session.
-- **Explicit** (skills) — lets you or the agent save, search, and manage memories on demand.
+- **Implicit** (hooks) — automatically recalls context before each prompt and captures completed turns in the background.
+- **Explicit** (MCP tools) — lets you or the agent search, save, list, and forget memories on demand.
 
-## Get Your API Key
+<Tip>
+**Prefer to keep everything on your machine?** This plugin works with [self-hosted Supermemory](/self-hosting/overview) — run `npx supermemory local`, then `export SUPERMEMORY_API_URL="http://localhost:6767"` (or set `baseUrl` in `~/.codex/supermemory.json`) and use the API key printed on first boot.
+</Tip>
 
-Create a Supermemory API key from the [API Keys](https://console.supermemory.ai/keys) page, then export it in your shell profile:
+## Install the plugin
+
+```bash
+npx codex-supermemory@latest install
+```
+
+This command:
+
+- Copies the pre-bundled hook scripts and MCP proxy to `~/.codex/supermemory/`
+- Registers the `supermemory` MCP server in `~/.codex/config.toml`
+- Registers `SessionStart`, `UserPromptSubmit`, `PreToolUse`, and `Stop` hooks in `~/.codex/hooks.json`
+- Installs the `supermemory-status` and `supermemory-index` skills under `~/.codex/skills/`
+
+Restart Codex CLI after installing.
+
+## Authenticate
+
+**Browser auth is preferred.** Start Codex CLI — a browser window opens to authenticate with Supermemory.
+
+Alternatively, set an API key from [API Keys](https://console.supermemory.ai/keys):
 
 <Tabs>
   <Tab title="macOS / Linux (zsh)">
@@ -35,82 +56,62 @@ Create a Supermemory API key from the [API Keys](https://console.supermemory.ai/
   </Tab>
 </Tabs>
 
-## Install the Plugin
+## How it works
 
-```bash
-npx codex-supermemory@latest install
+Once installed, the plugin runs on every Codex session:
+
+| Hook | Event | What it does |
+|------|-------|--------------|
+| `session-start` | `SessionStart` | Loads persistent and recent profile context for the session |
+| `recall` | `UserPromptSubmit` | Searches Supermemory directly for substantive prompts and injects fresh relevant memories |
+| `recall-approve` | `PreToolUse` | Auto-allows `search_memory` and the legacy camelCase read tools (`listMemories`, `listDocuments`, `getDocument`, `listSpaces`, `whoAmI`); other Supermemory MCP tools still ask |
+| `flush` | `Stop` | Captures completed turns in the background |
+
+- **Recall modes** — Set `recallMode` to `"advisory"` to let the model decide when to search, or `"off"` to disable prompt recall.
+- **Privacy** — Content wrapped in `<private>...</private>` is redacted before storage.
+
+### Memory scopes
+
+Codex, Claude Code, and OpenCode use one container per repository:
+
+```text
+repo_<project-name>__<remote-hash>
 ```
 
-This command:
-- Copies hook and skill scripts to `~/.codex/supermemory/`
-- Enables `codex_hooks = true` in `~/.codex/config.toml`
-- Registers `UserPromptSubmit` (recall) and `Stop` (capture) hooks in `~/.codex/hooks.json`
-- Installs `supermemory-search`, `supermemory-save`, and `supermemory-forget` skills to `~/.codex/skills/`
+Automatic captures go to this container with `sm_scope: personal` metadata. Explicit saves through the MCP tools are passed to the hosted server unchanged, so they land in your account's active space, not the repository container. The hash comes from the normalized Git remote, so clones and linked worktrees share memory while same-named repositories do not collide. Codex still reads the older `codex_user_*`, `codex_project_*`, and other per-tool containers, so existing memories stay searchable.
 
-Restart Codex CLI after installing.
-
-## How It Works
-
-Once installed, the plugin runs automatically on every Codex session:
-
-- **Recall** — Before each prompt, relevant memories and your user profile are fetched from Supermemory and injected as additional context.
-- **Capture** — After each session ends, the conversation transcript is ingested into Supermemory, scoped to the current project and user.
-- **Privacy** — Content wrapped in `<private>...</private>` tags is redacted before storage.
-
-### Memory Scopes
-
-Memories are tagged with two container tags per session, auto-derived from your environment:
-
-| Tag | Derived from | Description |
-|-----|-------------|-------------|
-| User | `git config user.email` (hashed) | Memories shared across all your projects |
-| Project | Current working directory (hashed) | Memories scoped to the current repo |
-
-Tags are generated automatically — no configuration needed. You can override them in `~/.codex/supermemory.json` if needed:
+Override the container in `~/.codex/supermemory.json` if needed:
 
 ```json
 {
-  "userContainerTag": "my-custom-user-tag",
   "projectContainerTag": "my-custom-project-tag"
 }
 ```
 
-## Explicit Memory Skills
+Set `SUPERMEMORY_ISOLATE_WORKTREES=true` to keep each worktree isolated.
 
-The installer includes three skills that Codex auto-discovers from `~/.codex/skills/`. They use the same `SUPERMEMORY_CODEX_API_KEY` as the hooks — no separate login needed.
+## Explicit memory
+
+Search, save, list, and forget go through the hosted [Supermemory MCP](/supermemory-mcp/mcp) tools, using the same credentials as the hooks. The installer also adds two skills:
 
 | Skill | Description |
 |-------|-------------|
-| `supermemory-search` | Search your memories by natural-language query |
-| `supermemory-save` | Save important project knowledge to memory |
-| `supermemory-forget` | Remove outdated or incorrect memories |
+| `supermemory-status` | Check the saved credential, API reachability, active project container, and account |
+| `supermemory-index` | Explore the repository and save focused memories about architecture, conventions, and how to run it |
 
-These skills let you interact with memory explicitly — for example:
+Example prompts:
 
 ```
 > Remember that this project uses Vitest for unit tests and Playwright for E2E.
 > What do you remember about our database schema?
 > Forget the memory about the old API endpoint.
+> Is Supermemory connected?
 ```
 
-## Verify Installation
+## Verify installation
 
 ```bash
 npx codex-supermemory status
-```
-
-Expected output when everything is configured:
-
-```
-codex-supermemory status:
-
-  API key:       ✓ set (SUPERMEMORY_CODEX_API_KEY)
-  Hook scripts:  ✓ installed at ~/.codex/supermemory
-  hooks.json:    ✓ registered (implicit memory)
-  Skills:        ✓ installed (supermemory-search, supermemory-save, supermemory-forget)
-  config.toml:   ✓ exists
-
-All good! Memory is active.
 ```
 
 ## Uninstall
@@ -119,7 +120,7 @@ All good! Memory is active.
 npx codex-supermemory uninstall
 ```
 
-This removes the hook registrations and skill scripts from `~/.codex/supermemory/`, removes skill directories from `~/.codex/skills/`, and disables `codex_hooks` in `~/.codex/config.toml`. Your existing memories in Supermemory are preserved.
+This removes the hook registrations, MCP server entry, and skills. Your existing memories in Supermemory are preserved.
 
 ## Configuration
 
@@ -128,42 +129,47 @@ Create `~/.codex/supermemory.json` to override defaults:
 ```json
 {
   "apiKey": "sm_...",
+  "baseUrl": "https://api.supermemory.ai",
   "similarityThreshold": 0.6,
   "maxMemories": 5,
   "maxProfileItems": 5,
   "injectProfile": true,
-  "containerTagPrefix": "codex",
+  "recallMode": "direct",
+  "signalExtraction": false,
   "debug": false
 }
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `apiKey` | — | API key (overrides env var) |
+| `apiKey` | — | API key (env / browser auth preferred) |
+| `baseUrl` | `https://api.supermemory.ai` | API base URL (`SUPERMEMORY_API_URL` overrides) |
+| `apiVersion` | auto | `v5` or `legacy`. The hosted API uses v5; custom URLs default to `legacy`. Set `v5` to use v5 with a self-hosted server 0.0.9 or newer |
 | `similarityThreshold` | `0.6` | Minimum match score for recall (0–1) |
 | `maxMemories` | `5` | Max memories injected per prompt |
 | `maxProfileItems` | `5` | Max profile facts injected per prompt |
 | `injectProfile` | `true` | Include user profile in context |
-| `containerTagPrefix` | `"codex"` | Prefix for container tags |
+| `projectContainerTag` | auto (per repo) | Override the unified project container |
+| `recallMode` | `"direct"` | `"direct"`, `"advisory"`, or `"off"` |
+| `recallDirective` | built-in | Context injected when `recallMode` is `"advisory"` |
+| `signalExtraction` | `false` | Legacy API only: capture only turns with signal keywords. On v5 the whole session is sent |
 | `debug` | `false` | Write debug logs to `~/.codex-supermemory.log` |
 
 ## Logging
-
-Enable debug logging to trace hook activity:
 
 ```bash
 export SUPERMEMORY_DEBUG=true
 tail -f ~/.codex-supermemory.log
 ```
 
-## Next Steps
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="GitHub Repository" icon="github" href="https://github.com/supermemoryai/codex-supermemory">
+  <Card title="GitHub repository" icon="/images/github-icon.svg" href="https://github.com/supermemoryai/codex-supermemory">
     Source code, issues, and detailed README.
   </Card>
 
-  <Card title="Claude Code Plugin" icon="code" href="/integrations/claude-code">
-    Memory plugin for Claude Code.
+  <Card title="Cursor plugin" icon="/images/cursor-logo.svg" href="/integrations/cursor">
+    Memory for your Cursor chats.
   </Card>
 </CardGroup>

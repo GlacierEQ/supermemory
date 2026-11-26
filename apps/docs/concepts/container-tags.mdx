@@ -1,0 +1,232 @@
+---
+title: "Namespaces"
+sidebarTitle: "Namespaces"
+description: "Namespaces, formerly container tags, are the isolation boundary that partitions memories by user, project, or any logical scope"
+icon: "/icons/hugeicons/folder-01.svg"
+keywords: ["container tag", "container tags", "containerTag", "containerTags", "namespace"]
+---
+
+A **namespace** is the primary way you organize and isolate memories in Supermemory. It is a string identifier you choose, and it scopes every call: add, search, list, update, and delete all happen inside one namespace.
+
+<Note>
+Namespaces were called **container tags** (`containerTag`) in v3 and v4. Same values, nothing moved. See the [v5 migration guide](/migration/api-v5).
+</Note>
+
+Every memory in `user_alex` lives in its own isolated space, completely separate from memories in `user_jordan`. This is what makes Supermemory safe to use in multi-tenant applications: one user can never see another user's memories unless you explicitly query both namespaces.
+
+<CardGroup cols={2}>
+  <Card title="Group" icon="/icons/hugeicons/layers-01.svg">
+    Bucket memories by user, project, agent, workspace, or any boundary that makes sense for your app.
+  </Card>
+  <Card title="Isolate" icon="/icons/hugeicons/shield-01.svg">
+    Each namespace maps to its own vector index, so search and retrieval never leak across boundaries.
+  </Card>
+</CardGroup>
+
+---
+
+## How it works
+
+When you add a document to a namespace, Supermemory creates that namespace (scoped to your organization) if it does not exist yet. You don't need to provision anything ahead of time. The first write to a new namespace creates it, and later writes reuse it.
+
+<CodeGroup>
+
+```typescript TypeScript
+import { Supermemory } from "supermemory";
+
+const supermemory = new Supermemory({ apiKey: process.env.SUPERMEMORY_API_KEY });
+
+// First call auto-creates the "user_alex" namespace
+await supermemory.add("user_alex", {
+  content: "Alex prefers dark mode and concise answers",
+});
+
+// Later, retrieve only Alex's memories
+const results = await supermemory.search("user_alex", {
+  query: "what are the user's UI preferences?",
+});
+```
+
+```bash curl
+curl -X POST "https://api.supermemory.ai/ns/user_alex/document" \
+  -H "Authorization: Bearer $SUPERMEMORY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "content": "Alex prefers dark mode and concise answers" }'
+
+curl -X POST "https://api.supermemory.ai/ns/user_alex/search" \
+  -H "Authorization: Bearer $SUPERMEMORY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "query": "what are the user'\''s UI preferences?" }'
+```
+
+</CodeGroup>
+
+Under the hood, each namespace is backed by a dedicated vector index. Embeddings, chunks, and memory entries for one namespace are stored and searched independently of every other namespace. There is no shared index to filter through, which is why isolation is strict rather than best-effort.
+
+<Note>
+A namespace is an **opaque identifier you choose**. Supermemory does not parse meaning out of it: `user_123`, `project_mobile`, and `org:acme:team:growth` are all equally valid. Pick a convention that mirrors the access boundaries in your own application.
+</Note>
+
+---
+
+## Naming rules
+
+Namespaces are validated on every request. A namespace must:
+
+- Be **100 characters or less**
+- Contain only **alphanumeric characters, hyphens (`-`), underscores (`_`), and colons (`:`)**
+
+Matching pattern: `^[a-zA-Z0-9_:-]+$`
+
+```typescript
+// ✅ Valid
+"user_123"
+"project-mobile-app"
+"org:acme:user:john"
+"tenant_42_workspace_7"
+
+// ❌ Invalid — spaces, slashes, and other symbols are rejected
+"user 123"
+"project/mobile"
+"team@acme"
+```
+
+The colon is intentionally allowed so you can build **hierarchical** namespaces (for example `org:acme:user:john`) that encode several levels of structure in a single identifier.
+
+---
+
+## Scope lives in the URL
+
+In v5 the namespace is a path segment, not a body field. Every scoped endpoint starts with `/ns/{namespace}/`, and every scoped SDK call takes `namespace` as its first argument.
+
+| Legacy (v3/v4) | v5 |
+|-----------|------|
+| `containerTag` string in the request body | `/ns/{namespace}` in the URL |
+| `containerTags` array | Not supported. One namespace per request. |
+
+<Warning>
+A request can only touch one namespace. To read across several namespaces, make one request per namespace and merge the results in your application.
+</Warning>
+
+---
+
+## Where namespaces are used
+
+The same namespace flows through the entire lifecycle of a memory. Pass it consistently and your data stays neatly partitioned.
+
+| Operation | Behavior |
+|-----------|----------|
+| **Add** | Writes the document into the namespace (auto-creating it). |
+| **Search** | Restricts retrieval to the namespace. |
+| **List** | Returns only documents, chunks, or memories in the namespace. |
+| **Update / Delete** | Targets the document inside the namespace. |
+
+```typescript
+// Add
+await supermemory.add("project_q1", { content: "Q1 planning notes" });
+
+// Search within the same namespace
+await supermemory.search("project_q1", { query: "planning" });
+
+// List every document in the namespace
+await supermemory.list("project_q1", "documents");
+```
+
+---
+
+## Access control
+
+Namespaces are also an **authorization boundary**, not just an organizational one. Two mechanisms can restrict which namespaces a given caller may touch:
+
+- **API key scopes** — an API key can be limited to a specific set of namespaces, and a key can be read-only.
+- **Member restrictions** — an organization member can be granted access to only certain namespaces, with read or write permission per namespace.
+
+When a request is restricted, Supermemory validates the namespace in the URL against the caller's allowed set:
+
+- Requesting a namespace outside the allowed set returns `403 Forbidden`.
+- A write (add/update/delete) to a read-only namespace returns `403 Forbidden`.
+
+This means you can hand out an API key that is physically incapable of reading or writing another tenant's data, enforced at the data layer rather than in your application code.
+
+---
+
+## Managing namespaces
+
+The `namespaces.*` SDK methods read and change a namespace itself, as opposed to the documents inside it.
+
+| Method | What it does |
+|--------|--------------|
+| `supermemory.namespaces.list()` | Page through namespaces with `documentCount` and `memoryCount`. |
+| `supermemory.namespaces.get(namespace)` | Read one namespace and its `supportingContext`. |
+| `supermemory.namespaces.update(namespace, { supportingContext })` | Set a context prompt applied when processing documents in this namespace. Useful for steering extraction per project or tenant. |
+| `supermemory.namespaces.delete(namespace)` | Delete the namespace, its namespace-owned memory records, and documents exclusive to it. Shared documents are retained. |
+| `supermemory.namespaces.delete(namespace, { moveTo })` | Move the content into another namespace, then remove this one. Queued; returns an `operationId`. |
+
+`supportingContext` is what v3/v4 called `entityContext`. The legacy "merge" operation is now a delete with `moveTo`, one source namespace per request.
+
+Namespace deletion and moves require an org admin or owner with write access to the source namespace; moves also require write access to the destination. The default `sm_project_default` namespace cannot be permanently deleted. See [deletion scope and erasure limits](/overview/security).
+
+<CodeGroup>
+
+```typescript TypeScript
+await supermemory.namespaces.update("project_research", {
+  supportingContext: "This project contains research papers about machine learning.",
+});
+
+const { namespaces, pagination } = await supermemory.namespaces.list();
+// namespaces: [{ id, namespace, documentCount, memoryCount, description, system }]
+
+// Consolidate: move everything from the old namespace, then remove it
+await supermemory.namespaces.delete("project_research_old", {
+  moveTo: "project_research",
+});
+// { status: "queued", operationId, namespace, moveTo }
+```
+
+```bash curl
+curl -X PATCH "https://api.supermemory.ai/ns/project_research" \
+  -H "Authorization: Bearer $SUPERMEMORY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "supportingContext": "This project contains research papers about machine learning." }'
+
+curl "https://api.supermemory.ai/namespaces" \
+  -H "Authorization: Bearer $SUPERMEMORY_API_KEY"
+
+curl -X DELETE "https://api.supermemory.ai/ns/project_research_old?moveTo=project_research" \
+  -H "Authorization: Bearer $SUPERMEMORY_API_KEY"
+```
+
+</CodeGroup>
+
+---
+
+## Choosing a convention
+
+Pick a naming scheme that maps onto the isolation boundaries your application actually needs.
+
+| Pattern | Example | Use case |
+|---------|---------|----------|
+| User isolation | `user_{userId}` | Per-user memory in a consumer app |
+| Project grouping | `project_{projectId}` | Project- or workspace-scoped content |
+| Agent scoping | `agent_{agentId}` | Separate long-term memory per AI agent |
+| Hierarchical | `org:{orgId}:user:{userId}` | Multi-level, multi-tenant SaaS |
+
+<Tip>
+Keep namespaces **deterministic** — derive them directly from IDs you already have (a user ID, a tenant ID) so you can always reconstruct the right namespace at query time without a lookup.
+</Tip>
+
+---
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Organizing & Filtering" icon="/icons/hugeicons/filter.svg" href="/concepts/filtering">
+    Combine namespaces with metadata filters for precise retrieval.
+  </Card>
+  <Card title="Scoped API keys" icon="/icons/hugeicons/key-01.svg" href="/authentication#scoped-api-keys">
+    Mint keys that can only touch one namespace — multi-tenant clients without the org master key.
+  </Card>
+  <Card title="Adding Memories" icon="/icons/hugeicons/plus-sign.svg" href="/ingestion/add-memories">
+    See namespaces in action across the add API.
+  </Card>
+</CardGroup>

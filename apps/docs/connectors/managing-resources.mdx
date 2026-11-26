@@ -1,0 +1,271 @@
+---
+title: 'Managing Connector Selection'
+sidebarTitle: 'Managing Resources'
+description: 'Choose what a connector syncs with the hosted picker or a direct selection update'
+icon: 'folder-sync'
+---
+
+<Note>
+**Selectable connectors:** GitHub (repositories), Gmail (labels), Google Drive (files and folders) and OneDrive (folders) let you choose what to sync. Other connectors sync everything and return `selection: null`, as does a OneDrive connector set to sync the whole drive.
+</Note>
+
+Some connectors let you select which resources to sync. v5 exposes this through two calls on the connector itself: read it with `include: "picker"` to get a hosted picker URL, or send the ids directly with `connectors.update`.
+
+## Open the Hosted Picker
+
+`GET /ns/{namespace}/connectors/{id}?include=picker`
+
+Returns a one-time picker URL. Send the user there; Supermemory lists their resources, saves the selection and starts a sync. Pass `returnUrl` to choose where the picker sends the user when they finish.
+
+<CodeGroup>
+```typescript Typescript
+import { Supermemory } from "supermemory"
+
+const supermemory = new Supermemory({ apiKey: process.env.SUPERMEMORY_API_KEY })
+
+const connector = await supermemory.connectors.get("user-123", connectorId, {
+  include: "picker",
+  returnUrl: "https://yourapp.com/settings/integrations"
+})
+
+console.log("Picker URL:", connector.picker?.url)
+console.log("Expires at:", connector.picker?.expiresAt)
+console.log("Selectable:", connector.capabilities.selectable)
+```
+
+```python Python
+from supermemory import Supermemory
+import os
+
+client = Supermemory(api_key=os.environ.get("SUPERMEMORY_API_KEY"))
+
+connector = client.connectors.get(
+    "user-123",
+    connector_id,
+    include=["picker"],
+    return_url="https://yourapp.com/settings/integrations",
+)
+
+print(f"Picker URL: {connector.picker.url if connector.picker else None}")
+print(f"Expires at: {connector.picker.expires_at if connector.picker else None}")
+print(f"Selectable: {connector.capabilities.selectable}")
+```
+
+```bash cURL
+curl "https://api.supermemory.ai/ns/user-123/connectors/{connectorId}?include=picker&returnUrl=https%3A%2F%2Fyourapp.com%2Fsettings%2Fintegrations" \
+  -H "Authorization: Bearer $SUPERMEMORY_API_KEY"
+```
+</CodeGroup>
+
+### Query parameters
+
+- `include`: `picker` for the hosted picker URL, `syncs` for recent sync runs, or `syncs,picker` for both
+- `returnUrl`: Optional. Where the hosted picker sends the user when they finish
+
+### Response
+
+```json
+{
+  "id": "PTzGiUYei7pgzg5buzZHgA",
+  "provider": "github",
+  "namespace": "user-123",
+  "capabilities": { "selectable": true, "webhooks": true },
+  "selection": {
+    "repos": [
+      { "id": "123456789", "name": "your-org/documentation" }
+    ]
+  },
+  "picker": {
+    "url": "https://...",
+    "expiresAt": "2024-01-15T11:30:00.000Z"
+  }
+}
+```
+
+<Note>
+The picker link works once, in any browser. `picker` is `null` for providers that do not support selection. A Google Drive or OneDrive connector with whole-drive sync can still open the picker; saving a selection switches it to scoped sync. Because the link changes what syncs, `include=picker` needs an admin key with write access to the namespace; otherwise the request returns `403`.
+</Note>
+
+## Set the Selection Directly
+
+`PATCH /ns/{namespace}/connectors/{id}`
+
+Send the ids to sync, grouped by kind. The new selection replaces the current one and starts a sync. Webhooks are registered for the selected resources.
+
+<CodeGroup>
+```typescript Typescript
+import { Supermemory } from "supermemory"
+
+const supermemory = new Supermemory({ apiKey: process.env.SUPERMEMORY_API_KEY })
+
+const connector = await supermemory.connectors.update("user-123", connectorId, {
+  selection: {
+    repos: ["123456789", "987654321"],
+  },
+})
+
+console.log("Selection:", connector.selection)
+console.log("Last sync:", connector.latestRun?.system.status)
+```
+
+```python Python
+from supermemory import Supermemory
+import os
+
+client = Supermemory(api_key=os.environ.get("SUPERMEMORY_API_KEY"))
+
+connector = client.connectors.update(
+    "user-123",
+    connector_id,
+    selection={"repos": ["123456789", "987654321"]},
+)
+
+print(f"Selection: {connector.selection}")
+print(f"Last sync: {connector.latest_run.system.status if connector.latest_run else 'never'}")
+```
+
+```bash cURL
+curl -X PATCH "https://api.supermemory.ai/ns/user-123/connectors/{connectorId}" \
+  -H "Authorization: Bearer $SUPERMEMORY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selection": {
+      "repos": ["123456789", "987654321"]
+    }
+  }'
+```
+</CodeGroup>
+
+### Request body
+
+```json
+{
+  "selection": {
+    "repos": ["123456789"]
+  }
+}
+```
+
+The selection key depends on the provider:
+- GitHub: `repos` (repository ids)
+- Gmail: `labels` (label ids, for example `INBOX`)
+- Google Drive: `files` and `folders` (Drive ids)
+- OneDrive: `folders` (OneDrive folder ids)
+
+You can send `documentLimit` in the same body. Each call must include `selection`, `documentLimit`, or both.
+
+### Response
+
+The updated connector object, including the saved `selection` as `{ id, name }` pairs.
+
+```json
+{
+  "id": "PTzGiUYei7pgzg5buzZHgA",
+  "provider": "github",
+  "selection": {
+    "repos": [
+      { "id": "123456789", "name": "your-org/documentation" },
+      { "id": "987654321", "name": "your-org/api-docs" }
+    ]
+  },
+  "latestRun": { "errorCode": null, "error": null, "system": { "status": "running", "startedAt": "...", "completedAt": null } }
+}
+```
+
+### Error Responses
+
+- `400`: Connector does not support selection, the selection is empty or has unknown ids, or the connector needs to be reconnected
+- `401`: Unauthorized
+- `403`: The key lacks admin role or write access to the connector's namespaces
+- `404`: Connector not found
+- `409`: Connector is still waiting for the user to finish authorizing
+
+<Note>
+**Automatic Sync:** After a selection is saved, a sync starts for the connector. You don't need to call `connectors.sync` afterwards.
+</Note>
+
+## Example: GitHub repository selection
+
+Here's a complete example for GitHub:
+
+<CodeGroup>
+```typescript Typescript
+// 1. Create the connector
+const created = await supermemory.connectors.create("user-123", {
+  provider: "github",
+  redirectUrl: "https://yourapp.com/callback"
+})
+
+// 2. Send the user to GitHub. After they authorize, Supermemory shows the hosted
+//    repository picker, then returns them to redirectUrl
+if (created.authorization) window.location.href = created.authorization.url
+
+// 3. To change repositories later, open the hosted picker again
+const connector = await supermemory.connectors.get("user-123", created.id, {
+  include: "picker",
+  returnUrl: "https://yourapp.com/settings/integrations"
+})
+if (connector.picker) window.location.href = connector.picker.url
+
+// 4. Or, if you already know the repository ids, set them directly
+await supermemory.connectors.update("user-123", created.id, {
+  selection: { repos: selectedRepositoryIds },
+})
+```
+
+```python Python
+# 1. Create the connector
+created = client.connectors.create(
+    "user-123",
+    request={
+        "provider": "github",
+        "redirect_url": "https://yourapp.com/callback",
+    },
+)
+
+# 2. Send the user to GitHub. After they authorize, Supermemory shows the hosted
+#    repository picker, then returns them to redirect_url
+print(f"Redirect to: {created.authorization.url}")
+
+# 3. To change repositories later, open the hosted picker again
+connector = client.connectors.get(
+    "user-123",
+    created.id,
+    include=["picker"],
+    return_url="https://yourapp.com/settings/integrations",
+)
+if connector.picker:
+    print(f"Redirect to: {connector.picker.url}")
+
+# 4. Or, if you already know the repository ids, set them directly
+client.connectors.update(
+    "user-123",
+    created.id,
+    selection={"repos": selected_repository_ids},
+)
+```
+
+```bash cURL
+# 1. Create the connector
+curl -X POST "https://api.supermemory.ai/ns/user-123/connectors" \
+  -H "Authorization: Bearer $SUPERMEMORY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"provider": "github", "redirectUrl": "https://yourapp.com/callback"}'
+
+# 2. ... (user authorizes at authorization.url and picks repositories in the hosted picker) ...
+
+# 3. To change repositories later, get a one-time hosted picker URL
+curl "https://api.supermemory.ai/ns/user-123/connectors/{connectorId}?include=picker" \
+  -H "Authorization: Bearer $SUPERMEMORY_API_KEY"
+
+# 4. Or set the repositories directly
+curl -X PATCH "https://api.supermemory.ai/ns/user-123/connectors/{connectorId}" \
+  -H "Authorization: Bearer $SUPERMEMORY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selection": {
+      "repos": ["123456789"]
+    }
+  }'
+```
+</CodeGroup>

@@ -1,23 +1,72 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ForceSimulation } from "../canvas/simulation"
+import {
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react"
+import {
+	DENSE_GRAPH_STATIC_THRESHOLD,
+	ForceSimulation,
+} from "../canvas/simulation"
+import { DEFAULT_HOVER_POPOVER_Z_INDEX, DEFAULT_LABELS } from "../constants"
 import { VersionChainIndex } from "../canvas/version-chain"
+import type { GraphPage } from "../api-types"
+import { graphPageToDocuments } from "../graph-page"
 import type { ViewportState } from "../canvas/viewport"
 import { useGraphData } from "../hooks/use-graph-data"
 import { useGraphTheme } from "../hooks/use-graph-theme"
-import type { GraphThemeColors, MemoryGraphProps } from "../types"
+import { useInitialGraphFit } from "../hooks/use-initial-graph-fit"
+import type {
+	GraphApiDocument,
+	GraphNode,
+	MemoryNodeData,
+	GraphThemeColors,
+	MemoryGraphProps,
+	ResolvedMemoryGraphLabels,
+} from "../types"
 import { GraphCanvas } from "./graph-canvas"
 import { Legend } from "./legend"
 import { LoadingIndicator } from "./loading-indicator"
 import { NavigationControls } from "./navigation-controls"
 import { NodeHoverPopover } from "./node-hover-popover"
 
+function documentIdForNode(
+	node: GraphNode | null,
+	documents: GraphApiDocument[],
+): string | null {
+	if (!node || typeof node.data.id !== "string" || !node.data.id.trim())
+		return null
+	if (node.type === "document") {
+		return documents.some((document) => document.id === node.data.id)
+			? node.data.id
+			: null
+	}
+	const sourceId = (node.data as MemoryNodeData).documentId
+	if (typeof sourceId !== "string" || !sourceId.trim()) return null
+	const ids = new Set(
+		documents
+			.filter(
+				(document) =>
+					document.id.trim() &&
+					document.memories.some((memory) => memory.id === node.data.id),
+			)
+			.map((document) => document.id),
+	)
+	return ids.size === 1 && ids.has(sourceId) ? sourceId : null
+}
+
+const NO_DOCUMENTS: GraphApiDocument[] = []
+
 export function MemoryGraph({
-	documents = [],
-	isLoading: externalIsLoading = false,
+	documents: documentsProp,
+	endpoint,
+	isLoading: isLoadingProp = false,
 	isLoadingMore = false,
 	onLoadMore,
 	hasMore = false,
-	error: externalError = null,
+	error: errorProp = null,
 	children,
 	variant = "console",
 	highlightDocumentIds = [],
@@ -29,8 +78,59 @@ export function MemoryGraph({
 	canvasRef: externalCanvasRef,
 	colors: colorOverrides,
 	totalCount,
-	onOpenDocument,
+	onOpenDocument: externalOnOpenDocument,
+	labels: labelOverrides,
+	layering,
+	appearance,
+	openDocumentOnEnter = false,
 }: MemoryGraphProps) {
+	const [fetched, setFetched] = useState<{
+		endpoint?: string
+		documents?: GraphApiDocument[]
+		error?: Error
+	}>({})
+
+	useEffect(() => {
+		if (!endpoint) return
+		const controller = new AbortController()
+		fetch(endpoint, { method: "POST", signal: controller.signal })
+			.then(async (response) => {
+				if (!response.ok) {
+					const body = (await response.json().catch(() => null)) as {
+						error?: unknown
+					} | null
+					throw new Error(
+						typeof body?.error === "string"
+							? body.error
+							: `Graph request failed: ${response.status}`,
+					)
+				}
+				return response.json() as Promise<GraphApiDocument[] | GraphPage>
+			})
+			.then((data) =>
+				setFetched({
+					endpoint,
+					documents: Array.isArray(data) ? data : graphPageToDocuments(data),
+				}),
+			)
+			.catch((error: Error) => {
+				if (!controller.signal.aborted) setFetched({ endpoint, error })
+			})
+		return () => controller.abort()
+	}, [endpoint])
+
+	const current = endpoint && fetched.endpoint === endpoint ? fetched : null
+	const documents =
+		(endpoint ? current?.documents : documentsProp) ?? NO_DOCUMENTS
+	const externalIsLoading = isLoadingProp || (!!endpoint && !current)
+	const externalError = errorProp ?? current?.error ?? null
+
+	const resolvedLabels = useMemo<ResolvedMemoryGraphLabels>(
+		() => ({ ...DEFAULT_LABELS, ...labelOverrides }),
+		[labelOverrides],
+	)
+	const hoverPopoverZIndex =
+		layering?.hoverPopoverZIndex ?? DEFAULT_HOVER_POPOVER_Z_INDEX
 	const resolvedColors = useGraphTheme(colorOverrides)
 	const colors = useMemo<GraphThemeColors>(
 		() =>
@@ -60,29 +160,54 @@ export function MemoryGraph({
 	const limitedDocuments = useMemo(() => {
 		if (!maxNodes || documents.length === 0) return documents
 		let totalNodes = 0
-		let cutoff = documents.length
+		const limited: GraphApiDocument[] = []
 		for (let i = 0; i < documents.length; i++) {
-			const docNodes = 1 + (documents[i]?.memories?.length ?? 0)
-			if (totalNodes + docNodes > maxNodes) {
-				cutoff = i
+			const doc = documents[i]
+			if (!doc) continue
+			if (totalNodes >= maxNodes) break
+
+			const remainingNodes = maxNodes - totalNodes
+			const memories = doc.memories ?? []
+			const docNodes = 1 + memories.length
+
+			if (docNodes <= remainingNodes) {
+				limited.push(doc)
+				totalNodes += docNodes
+				continue
+			}
+
+			if (remainingNodes > 1) {
+				limited.push({
+					...doc,
+					memories: memories.slice(0, remainingNodes - 1),
+				})
+				totalNodes = maxNodes
 				break
 			}
-			totalNodes += docNodes
+
+			limited.push({ ...doc, memories: [] })
+			totalNodes += 1
 		}
-		return cutoff === documents.length ? documents : documents.slice(0, cutoff)
+		return limited
 	}, [documents, maxNodes])
 
+	const hasContainerSize = containerSize.width > 0 && containerSize.height > 0
+
 	const { nodes, edges } = useGraphData(
-		limitedDocuments,
+		hasContainerSize ? limitedDocuments : [],
 		null,
 		containerSize.width,
 		containerSize.height,
 		colors,
+		variant === "console" ? "theme" : "cluster",
 	)
 	const isCompactViewport = containerSize.width > 0 && containerSize.width < 640
 	const graphFitHeight = isCompactViewport
 		? Math.max(containerSize.height - 170, 240)
 		: containerSize.height
+	const compactLegendMaxHeight = isCompactViewport
+		? Math.max(containerSize.height - 104, 160)
+		: undefined
 
 	// Rebuild version chain index during render (not in an effect) so that
 	// the chain data is up-to-date when getChain() is called in useMemo below.
@@ -90,21 +215,32 @@ export function MemoryGraph({
 	// that makes this a no-op on re-renders where limitedDocuments hasn't changed.
 	chainIndex.current.rebuild(limitedDocuments)
 
-	// Smart simulation re-init: track node ID set, only init() when IDs change
-	const prevSimIdsRef = useRef<string>("")
-	useEffect(() => {
+	const prevSimIdsRef = useRef<Set<string>>(new Set())
+	useLayoutEffect(() => {
 		if (nodes.length === 0) {
 			simulationRef.current?.destroy()
 			simulationRef.current = null
 			setSimulation(null)
-			prevSimIdsRef.current = ""
+			prevSimIdsRef.current = new Set()
 			return
 		}
 
-		const idKey = nodes
-			.map((n) => n.id)
-			.sort()
-			.join(",")
+		const currentIds = new Set(nodes.map((n) => n.id))
+		if (nodes.length > DENSE_GRAPH_STATIC_THRESHOLD) {
+			simulationRef.current?.destroy()
+			simulationRef.current = null
+			setSimulation(null)
+			prevSimIdsRef.current = currentIds
+			return
+		}
+
+		const previousIds = prevSimIdsRef.current
+		const hasPreviousIds = previousIds.size > 0
+		const idsChanged =
+			currentIds.size !== previousIds.size ||
+			[...currentIds].some((id) => !previousIds.has(id))
+		const isAppendOnly =
+			hasPreviousIds && [...previousIds].every((id) => currentIds.has(id))
 
 		if (!simulationRef.current) {
 			const sim = new ForceSimulation()
@@ -112,12 +248,14 @@ export function MemoryGraph({
 			setSimulation(sim)
 		}
 
-		if (idKey !== prevSimIdsRef.current) {
-			// IDs changed - full re-init
-			prevSimIdsRef.current = idKey
+		if (!hasPreviousIds || (idsChanged && !isAppendOnly)) {
+			prevSimIdsRef.current = currentIds
 			simulationRef.current.init(nodes, edges)
+		} else if (idsChanged && isAppendOnly) {
+			prevSimIdsRef.current = currentIds
+			simulationRef.current.update(nodes, edges)
+			simulationRef.current.settle()
 		} else {
-			// Only metadata changed - update existing simulation
 			simulationRef.current.update(nodes, edges)
 		}
 	}, [nodes, edges])
@@ -131,71 +269,49 @@ export function MemoryGraph({
 		}
 	}, [])
 
-	// Auto-fit when data first loads. Mobile needs a few passes because the
-	// force simulation can move nodes after the first layout frame.
-	const hasAutoFittedRef = useRef(false)
 	useEffect(() => {
-		if (
-			!hasAutoFittedRef.current &&
-			nodes.length > 0 &&
-			viewportRef.current &&
-			containerSize.width > 0
-		) {
-			const fitDelays = isCompactViewport ? [100, 450, 900] : [100]
-			const timers = fitDelays.map((delay, index) =>
-				setTimeout(() => {
-					viewportRef.current?.fitToNodes(
-						nodes,
-						containerSize.width,
-						graphFitHeight,
-					)
-					if (index === fitDelays.length - 1) {
-						hasAutoFittedRef.current = true
-					}
-				}, delay),
-			)
-			return () => {
-				for (const timer of timers) clearTimeout(timer)
-			}
-		}
-	}, [nodes, containerSize.width, graphFitHeight, isCompactViewport])
+		viewportRef.current?.setMinZoomForNodes(
+			nodes,
+			containerSize.width,
+			graphFitHeight,
+		)
+	}, [nodes, containerSize.width, graphFitHeight])
 
-	useEffect(() => {
-		if (!isCompactViewport || nodes.length === 0 || !viewportRef.current) return
-		const timer = setTimeout(() => {
-			viewportRef.current?.fitToNodes(
-				nodes,
-				containerSize.width,
-				graphFitHeight,
-			)
-		}, 120)
-		return () => clearTimeout(timer)
-	}, [isCompactViewport, nodes, containerSize.width, graphFitHeight])
-
-	useEffect(() => {
-		if (nodes.length === 0) hasAutoFittedRef.current = false
-	}, [nodes.length])
-
-	useEffect(() => {
-		if (isCompactViewport) {
-			hasAutoFittedRef.current = false
-		}
-	}, [isCompactViewport])
+	const stopFollowing = useInitialGraphFit({
+		documents: limitedDocuments,
+		nodes,
+		viewportRef,
+		simulationRef,
+		width: containerSize.width,
+		height: hasContainerSize ? graphFitHeight : 0,
+		isLoading: externalIsLoading,
+		isLoadingMore,
+		hasMore,
+	})
 
 	// Container resize observer
 	useEffect(() => {
 		const el = containerRef.current
 		if (!el) return
 
-		const ro = new ResizeObserver(() => {
-			setContainerSize({ width: el.clientWidth, height: el.clientHeight })
-			setContainerBounds(el.getBoundingClientRect())
-		})
-		ro.observe(el)
-		setContainerSize({ width: el.clientWidth, height: el.clientHeight })
-		setContainerBounds(el.getBoundingClientRect())
+		const measure = () => {
+			const rect = el.getBoundingClientRect()
+			const width = Math.round(rect.width) || el.clientWidth
+			const height = Math.round(rect.height) || el.clientHeight
+			setContainerSize({ width, height })
+			setContainerBounds(rect)
+		}
 
-		return () => ro.disconnect()
+		const ro = new ResizeObserver(measure)
+		ro.observe(el)
+		const parent = el.parentElement
+		if (parent) ro.observe(parent)
+		measure()
+		const raf = requestAnimationFrame(measure)
+		return () => {
+			cancelAnimationFrame(raf)
+			ro.disconnect()
+		}
 	}, [])
 
 	// Callbacks for GraphCanvas
@@ -277,11 +393,18 @@ export function MemoryGraph({
 	// Navigation
 	const handleAutoFit = useCallback(() => {
 		if (nodes.length === 0 || !viewportRef.current) return
+		stopFollowing()
+		viewportRef.current.setMinZoomForNodes(
+			nodes,
+			containerSize.width,
+			graphFitHeight,
+		)
 		viewportRef.current.fitToNodes(nodes, containerSize.width, graphFitHeight)
-	}, [nodes, containerSize.width, graphFitHeight])
+	}, [nodes, containerSize.width, graphFitHeight, stopFollowing])
 
 	const handleCenter = useCallback(() => {
 		if (nodes.length === 0 || !viewportRef.current) return
+		stopFollowing()
 		let sx = 0
 		let sy = 0
 		for (const n of nodes) {
@@ -294,23 +417,54 @@ export function MemoryGraph({
 			containerSize.width,
 			graphFitHeight,
 		)
-	}, [nodes, containerSize.width, graphFitHeight])
+	}, [nodes, containerSize.width, graphFitHeight, stopFollowing])
 
 	const handleZoomIn = useCallback(() => {
 		const vp = viewportRef.current
 		if (!vp) return
+		stopFollowing()
 		vp.zoomTo(vp.zoom * 1.3, containerSize.width / 2, graphFitHeight / 2)
-	}, [containerSize.width, graphFitHeight])
+	}, [containerSize.width, graphFitHeight, stopFollowing])
 
 	const handleZoomOut = useCallback(() => {
 		const vp = viewportRef.current
 		if (!vp) return
+		stopFollowing()
 		vp.zoomTo(vp.zoom / 1.3, containerSize.width / 2, graphFitHeight / 2)
-	}, [containerSize.width, graphFitHeight])
+	}, [containerSize.width, graphFitHeight, stopFollowing])
 
-	// Wrap onOpenDocument to dismiss the popover before opening the modal.
-	// Without this, the popover (z-index: 100) stays mounted on top of the
-	// document modal (z-50), obscuring it and intercepting clicks.
+	const activeDocumentId = useMemo(
+		() =>
+			openDocumentOnEnter
+				? documentIdForNode(
+						nodes.find((node) => node.id === (selectedNode ?? hoveredNode)) ??
+							null,
+						documents,
+					)
+				: null,
+		[openDocumentOnEnter, selectedNode, hoveredNode, nodes, documents],
+	)
+	const onOpenDocument = useMemo(
+		() =>
+			!openDocumentOnEnter
+				? externalOnOpenDocument
+				: externalOnOpenDocument && activeDocumentId
+					? (_documentId: string) => externalOnOpenDocument(activeDocumentId)
+					: undefined,
+		[openDocumentOnEnter, externalOnOpenDocument, activeDocumentId],
+	)
+	const selectedDocumentId = useMemo(
+		() =>
+			openDocumentOnEnter
+				? documentIdForNode(
+						nodes.find((node) => node.id === selectedNode) ?? null,
+						documents,
+					)
+				: null,
+		[openDocumentOnEnter, selectedNode, nodes, documents],
+	)
+	const canOpenOnEnter = openDocumentOnEnter && !!externalOnOpenDocument
+
 	const handleOpenDocument = useCallback(
 		(documentId: string) => {
 			setSelectedNode(null)
@@ -320,11 +474,53 @@ export function MemoryGraph({
 		[onOpenDocument],
 	)
 
-	// Keyboard shortcuts — using useEffect with keydown listener
+	const documentNavigationProps = canOpenOnEnter
+		? {
+				tabIndex: 0,
+				role: "region" as const,
+				"aria-label":
+					"Memory graph. Select a node, then press Enter to open its document.",
+				onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
+					if (
+						!selectedDocumentId ||
+						event.key !== "Enter" ||
+						event.defaultPrevented ||
+						event.repeat ||
+						event.nativeEvent.isComposing ||
+						event.ctrlKey ||
+						event.metaKey ||
+						event.altKey ||
+						event.shiftKey
+					)
+						return
+					if (
+						event.target !== event.currentTarget &&
+						!(event.target instanceof HTMLCanvasElement)
+					)
+						return
+					event.preventDefault()
+					event.stopPropagation()
+					handleOpenDocument(selectedDocumentId)
+				},
+			}
+		: {}
+
 	useEffect(() => {
 		const handler = (e: KeyboardEvent) => {
-			// Don't handle if user is typing in an input
 			const target = e.target as HTMLElement
+			if (
+				openDocumentOnEnter &&
+				(e.defaultPrevented ||
+					e.isComposing ||
+					e.ctrlKey ||
+					e.metaKey ||
+					e.altKey ||
+					(target instanceof Element &&
+						target.closest(
+							"input, textarea, select, [contenteditable], [role=textbox]",
+						)))
+			)
+				return
 			if (
 				target.tagName === "INPUT" ||
 				target.tagName === "TEXTAREA" ||
@@ -357,11 +553,18 @@ export function MemoryGraph({
 
 		window.addEventListener("keydown", handler)
 		return () => window.removeEventListener("keydown", handler)
-	}, [handleAutoFit, handleCenter, handleZoomIn, handleZoomOut])
+	}, [
+		handleAutoFit,
+		handleCenter,
+		handleZoomIn,
+		handleZoomOut,
+		openDocumentOnEnter,
+	])
 
 	// Arrow key navigation through nodes
 	const selectAndCenter = useCallback(
 		(nodeId: string) => {
+			stopFollowing()
 			setSelectedNode(nodeId)
 			const n = nodes.find((nd) => nd.id === nodeId)
 			if (n && viewportRef.current)
@@ -369,10 +572,10 @@ export function MemoryGraph({
 					n.x,
 					n.y,
 					containerSize.width,
-					containerSize.height,
+					graphFitHeight,
 				)
 		},
-		[nodes, containerSize.width, containerSize.height],
+		[nodes, containerSize.width, graphFitHeight, stopFollowing],
 	)
 
 	const navigateUp = useCallback(() => {
@@ -473,6 +676,20 @@ export function MemoryGraph({
 		const handler = (e: KeyboardEvent) => {
 			const target = e.target as HTMLElement
 			if (
+				openDocumentOnEnter &&
+				(e.defaultPrevented ||
+					e.isComposing ||
+					e.ctrlKey ||
+					e.metaKey ||
+					e.altKey ||
+					e.shiftKey ||
+					(target instanceof Element &&
+						target.closest(
+							"input, textarea, select, [contenteditable], [role=textbox]",
+						)))
+			)
+				return
+			if (
 				target.tagName === "INPUT" ||
 				target.tagName === "TEXTAREA" ||
 				target.isContentEditable
@@ -501,7 +718,13 @@ export function MemoryGraph({
 
 		window.addEventListener("keydown", handler)
 		return () => window.removeEventListener("keydown", handler)
-	}, [navigateUp, navigateDown, navigateNext, navigatePrev])
+	}, [
+		navigateUp,
+		navigateDown,
+		navigateNext,
+		navigatePrev,
+		openDocumentOnEnter,
+	])
 
 	// Slideshow — use refs to avoid re-creating the interval on resize or node updates
 	const nodesRef = useRef(nodes)
@@ -515,7 +738,6 @@ export function MemoryGraph({
 		if (!isSlideshowActive || nodes.length === 0) {
 			if (!isSlideshowActive) {
 				setSelectedNode(null)
-				simulationRef.current?.coolDown()
 			}
 			return
 		}
@@ -555,6 +777,7 @@ export function MemoryGraph({
 		return () => {
 			clearInterval(interval)
 			if (coolDownTimer) clearTimeout(coolDownTimer)
+			simulationRef.current?.coolDown()
 		}
 	}, [isSlideshowActive, nodes.length])
 
@@ -585,7 +808,15 @@ export function MemoryGraph({
 		return chainIndex.current.getChain(activeNodeData.id)
 	}, [activeNodeData, limitedDocuments])
 
-	const isLoading = externalIsLoading
+	const emptyState =
+		children ??
+		(endpoint ? (
+			<div style={{ color: colors.textSecondary }}>
+				{resolvedLabels.emptyGraph}
+			</div>
+		) : null)
+	const isLayoutPending = !hasContainerSize && limitedDocuments.length > 0
+	const isLoading = externalIsLoading || isLayoutPending
 
 	if (externalError) {
 		const errorContainerStyle: React.CSSProperties = {
@@ -593,7 +824,7 @@ export function MemoryGraph({
 			display: "flex",
 			alignItems: "center",
 			justifyContent: "center",
-			backgroundColor: "transparent",
+			backgroundColor: variant === "console" ? colors.bg : "transparent",
 			borderRadius: 12,
 		}
 
@@ -619,7 +850,12 @@ export function MemoryGraph({
 		height: "100%",
 		borderRadius: 12,
 		overflow: "hidden",
-		backgroundColor: "transparent",
+		backgroundColor: variant === "console" ? colors.bg : "transparent",
+		backgroundImage:
+			variant === "console"
+				? `radial-gradient(circle, ${colors.dotColor ?? colors.textMuted} 0.5px, transparent 0.5px)`
+				: undefined,
+		backgroundSize: variant === "console" ? "16px 16px" : undefined,
 	}
 
 	const canvasContainerStyle: React.CSSProperties = {
@@ -644,13 +880,14 @@ export function MemoryGraph({
 
 	const bottomLeftStackStyle: React.CSSProperties = {
 		position: "absolute",
-		bottom: 16,
-		left: 16,
+		bottom: isCompactViewport ? 12 : 16,
+		left: isCompactViewport ? 12 : 16,
 		zIndex: 20,
 		display: "flex",
 		flexDirection: "column",
 		alignItems: "flex-start",
 		gap: 8,
+		maxWidth: isCompactViewport ? "calc(100% - 24px)" : undefined,
 	}
 
 	return (
@@ -658,17 +895,33 @@ export function MemoryGraph({
 			<LoadingIndicator
 				isLoading={isLoading}
 				isLoadingMore={isLoadingMore}
+				labels={resolvedLabels}
 				totalLoaded={totalCount ?? documents.length}
 				colors={colors}
 			/>
 
-			{!isLoading && !nodes.some((n) => n.type === "document") && children && (
-				<div style={emptyStateStyle}>{children}</div>
-			)}
+			{!isLoading &&
+				!nodes.some((n) => n.type === "document") &&
+				emptyState && <div style={emptyStateStyle}>{emptyState}</div>}
 
-			<div style={canvasContainerStyle} ref={containerRef}>
-				{containerSize.width > 0 && containerSize.height > 0 && (
+			<div
+				style={canvasContainerStyle}
+				ref={containerRef}
+				{...documentNavigationProps}
+				onPointerDownCapture={(event) => {
+					if (event.target instanceof HTMLCanvasElement) {
+						stopFollowing()
+						if (canOpenOnEnter)
+							containerRef.current?.focus({ preventScroll: true })
+					}
+				}}
+				onWheelCapture={(event) => {
+					if (event.target instanceof HTMLCanvasElement) stopFollowing()
+				}}
+			>
+				{hasContainerSize && (
 					<GraphCanvas
+						appearance={appearance}
 						colors={colors}
 						edges={edges}
 						height={containerSize.height}
@@ -693,7 +946,9 @@ export function MemoryGraph({
 					<NodeHoverPopover
 						colors={colors}
 						containerBounds={containerBounds ?? undefined}
+						labels={resolvedLabels}
 						node={activeNodeData}
+						zIndex={hoverPopoverZIndex}
 						nodeRadius={activePopoverPosition.nodeRadius}
 						onNavigateDown={navigateDown}
 						onNavigateNext={navigateNext}
@@ -701,6 +956,10 @@ export function MemoryGraph({
 						onNavigateUp={navigateUp}
 						onSelectNode={handleNodeClick}
 						onOpenDocument={onOpenDocument ? handleOpenDocument : undefined}
+						openDocumentShortcut={
+							canOpenOnEnter && selectedDocumentId ? "Enter" : undefined
+						}
+						showDocumentTitle={appearance?.documentNodes === "stacked"}
 						screenX={activePopoverPosition.screenX}
 						screenY={activePopoverPosition.screenY}
 						versionChain={activeVersionChain}
@@ -722,7 +981,11 @@ export function MemoryGraph({
 						<Legend
 							colors={colors}
 							edges={edges}
+							labels={resolvedLabels}
+							hoveredNode={hoveredNode}
+							compact={isCompactViewport}
 							isLoading={isLoading}
+							maxHeight={compactLegendMaxHeight}
 							nodes={nodes}
 						/>
 					</div>

@@ -1,0 +1,95 @@
+---
+title: "Security & compliance"
+description: "How Supermemory protects data: encryption, isolation, SOC 2, GDPR, HIPAA BAA and deletion."
+sidebarTitle: "Security & compliance"
+icon: "/icons/hugeicons/shield-01.svg"
+---
+
+Supermemory stores long-horizon context about people and organizations. Security and compliance are part of the product surface, not a footer claim.
+
+This page is the product-level trust overview. For multi-tenant design details, see [Namespaces](/concepts/container-tags) and authentication docs in the Developer Platform.
+
+## Compliance posture
+
+| Framework | Status | Notes |
+|---|---|---|
+| **SOC 2 Type II** | Certified | Independent audit of security controls. Scale and Enterprise admins can [request the report](#get-the-dpa-and-soc-2-report) in the console. |
+| **GDPR** | Compliant | EU personal data handled with care; support for access and erasure workflows. |
+| **HIPAA** | BAA available | Business Associate Agreement available for eligible cloud plans (Scale / Enterprise). Cloud-only unless you self-host under your own controls. |
+
+## Get the DPA and SOC 2 report
+
+Admins of Scale and Enterprise organizations get both in the console under [**Settings → Legal**](https://console.supermemory.ai/settings/legal).
+
+- **Data Processing Agreement:** enter your company's legal name and address, and the name, title and email of the person who signs. We prepare the DPA with those details, and Common Paper emails it to the signer to review and sign. When it's signed, download the PDF from the same page. If the signer declines, you can send it again.
+- **SOC 2 Type II report:** click **Request access**. You'll get an email invite to our [Trust Center](https://trust.supermemory.com). Accept the NDA there, then download the report.
+
+On another plan, or need a BAA or custom terms? Contact [support@supermemory.com](mailto:support@supermemory.com) or your enterprise contact.
+
+## Security controls
+
+### Encryption
+
+- **In transit:** TLS for API and console traffic
+- **At rest:** Industry-standard encryption for stored data (AES-256 class controls in the managed cloud)
+
+### Isolation and access
+
+- **Namespaces** (what v3/v4 called container tags) enforce hard boundaries between users, tenants, or projects — the primary multi-tenancy primitive.
+- **API keys** authenticate every request. Prefer **scoped keys** when a client or session must only touch one namespace.
+- **Organizations** in the console manage members, keys, and billing separation.
+
+A malicious or buggy client with a correctly scoped key cannot read another namespace’s memories.
+
+### Data use
+
+Supermemory is infrastructure for *your* agents. Your customer content is never used to train models — this applies to every plan, free or paid, with no difference between them. For contractual wording, see the [DPA](#get-the-dpa-and-soc-2-report); for subprocessors and training policies, ask support.
+
+### Data residency and deployment options
+
+- **Managed cloud** — default multi-tenant SaaS.
+- **Self-hosted binary** — the engine, storage, and default local embeddings run on your machine or VPC. If you configure remote LLM or embedding providers, their processing inputs are sent to those providers. See [Self-hosting](/self-hosting/overview).
+- **Enterprise / dedicated** — for stricter residency, air-gap, or custom deployment requirements. See [Local vs Enterprise](/self-hosting/local-vs-enterprise).
+
+## Privacy operations you should design for
+
+### Deleting a user (right to erasure)
+
+The practical GDPR-style path for app builders:
+
+1. Scope each end-user (or tenant) to a **namespace**.
+2. When the user requests deletion, use `DELETE /ns/{namespace}` with an org admin or owner credential that has write access. It deletes the namespace, its namespace-owned memory records, and documents exclusive to it; documents shared with other namespaces are retained. The default `sm_project_default` namespace cannot be deleted.
+3. Revoke any **scoped keys** issued for that user.
+
+Designing isolation up front still makes identifying the user's content easier.
+
+### Connectors and third-party sources
+
+OAuth connectors (Drive, Notion, Gmail, and others) pull content your users authorize. Disconnecting a connector stops future sync and, by default, deletes the documents it imported; pass `deleteDocuments=false` to keep them. Treat connector scope and retention as part of your product privacy policy.
+
+### Self-host when cloud is not enough
+
+If policy requires data never leave your network, run the [self-hosted engine](/self-hosting/overview). You bring the model endpoint (including fully offline OpenAI-compatible local models). Enterprise adds managed on-prem / dedicated options with organizational controls.
+
+## Reliability and support
+
+- Status and incidents are communicated through Supermemory’s status and support channels.
+- Support depth scales with plan (community → email → priority → dedicated enterprise).
+- Latency targets for retrieval are in the ~sub-300ms p50 range on the managed platform for typical search workloads; always validate on your traffic shape.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Billing & plans" icon="/icons/hugeicons/credit-card.svg" href="/overview/billing">
+    Which tiers include BAAs, seats, and self-host options.
+  </Card>
+  <Card title="Namespaces" icon="/icons/hugeicons/tag-01.svg" href="/concepts/container-tags">
+    How isolation works in the data model.
+  </Card>
+  <Card title="Authentication" icon="/icons/hugeicons/key-01.svg" href="/authentication">
+    API keys and access for the Developer Platform.
+  </Card>
+  <Card title="Self-hosting" icon="/icons/hugeicons/server-stack-01.svg" href="/self-hosting/overview">
+    Keep memory on your infrastructure.
+  </Card>
+</CardGroup>

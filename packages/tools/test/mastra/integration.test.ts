@@ -36,8 +36,8 @@ import "dotenv/config"
 const INTEGRATION_CONFIG = {
 	apiKey: process.env.SUPERMEMORY_API_KEY || "",
 	baseUrl: process.env.SUPERMEMORY_BASE_URL || "https://api.supermemory.ai",
-	containerTag: "integration-test-mastra",
-	customId: "integration-test-conversation",
+	namespace: "integration-test-mastra",
+	id: "integration-test-conversation",
 }
 
 const shouldRunIntegration = !!process.env.SUPERMEMORY_API_KEY
@@ -77,6 +77,7 @@ const createIntegrationMessageList = (): MessageList & {
 	const calls: { method: string; args: unknown[] }[] = []
 	return {
 		calls,
+		clearSystemMessages: vi.fn(),
 		addSystem: vi.fn((content: string, id?: string) => {
 			calls.push({ method: "addSystem", args: [content, id] })
 		}),
@@ -102,8 +103,8 @@ describe.skipIf(!shouldRunIntegration)(
 		describe("SupermemoryInputProcessor", () => {
 			it("should fetch real memories and inject into messageList", async () => {
 				const processor = new SupermemoryInputProcessor({
-					containerTag: INTEGRATION_CONFIG.containerTag,
-					customId: INTEGRATION_CONFIG.customId,
+					namespace: INTEGRATION_CONFIG.namespace,
+					id: INTEGRATION_CONFIG.id,
 					apiKey: INTEGRATION_CONFIG.apiKey,
 					baseUrl: INTEGRATION_CONFIG.baseUrl,
 					mode: "profile",
@@ -133,8 +134,8 @@ describe.skipIf(!shouldRunIntegration)(
 				const fetchSpy = vi.spyOn(globalThis, "fetch")
 
 				const processor = new SupermemoryInputProcessor({
-					containerTag: INTEGRATION_CONFIG.containerTag,
-					customId: INTEGRATION_CONFIG.customId,
+					namespace: INTEGRATION_CONFIG.namespace,
+					id: INTEGRATION_CONFIG.id,
 					apiKey: INTEGRATION_CONFIG.apiKey,
 					baseUrl: INTEGRATION_CONFIG.baseUrl,
 					mode: "query",
@@ -157,8 +158,7 @@ describe.skipIf(!shouldRunIntegration)(
 				await processor.processInput(args)
 
 				const profileCalls = fetchSpy.mock.calls.filter(
-					(call) =>
-						typeof call[0] === "string" && call[0].includes("/v4/profile"),
+					(call) => typeof call[0] === "string" && call[0].includes("/search"),
 				)
 				expect(profileCalls.length).toBeGreaterThan(0)
 
@@ -167,7 +167,7 @@ describe.skipIf(!shouldRunIntegration)(
 					const body = JSON.parse(
 						(profileCall[1] as RequestInit).body as string,
 					)
-					expect(body.q).toBe("What are my favorite programming languages?")
+					expect(body.query).toBe("What are my favorite programming languages?")
 				}
 
 				fetchSpy.mockRestore()
@@ -177,8 +177,8 @@ describe.skipIf(!shouldRunIntegration)(
 				const fetchSpy = vi.spyOn(globalThis, "fetch")
 
 				const processor = new SupermemoryInputProcessor({
-					containerTag: INTEGRATION_CONFIG.containerTag,
-					customId: INTEGRATION_CONFIG.customId,
+					namespace: INTEGRATION_CONFIG.namespace,
+					id: INTEGRATION_CONFIG.id,
 					apiKey: INTEGRATION_CONFIG.apiKey,
 					baseUrl: INTEGRATION_CONFIG.baseUrl,
 					mode: "full",
@@ -196,8 +196,7 @@ describe.skipIf(!shouldRunIntegration)(
 				await processor.processInput(args)
 
 				const profileCalls = fetchSpy.mock.calls.filter(
-					(call) =>
-						typeof call[0] === "string" && call[0].includes("/v4/profile"),
+					(call) => typeof call[0] === "string" && call[0].includes("/search"),
 				)
 				expect(profileCalls.length).toBeGreaterThan(0)
 
@@ -206,7 +205,7 @@ describe.skipIf(!shouldRunIntegration)(
 					const body = JSON.parse(
 						(profileCall[1] as RequestInit).body as string,
 					)
-					expect(body.q).toBe("Full mode test query")
+					expect(body.query).toBe("Full mode test query")
 				}
 
 				fetchSpy.mockRestore()
@@ -216,8 +215,8 @@ describe.skipIf(!shouldRunIntegration)(
 				const fetchSpy = vi.spyOn(globalThis, "fetch")
 
 				const processor = new SupermemoryInputProcessor({
-					containerTag: INTEGRATION_CONFIG.containerTag,
-					customId: INTEGRATION_CONFIG.customId,
+					namespace: INTEGRATION_CONFIG.namespace,
+					id: INTEGRATION_CONFIG.id,
 					apiKey: INTEGRATION_CONFIG.apiKey,
 					baseUrl: INTEGRATION_CONFIG.baseUrl,
 					mode: "profile",
@@ -237,8 +236,7 @@ describe.skipIf(!shouldRunIntegration)(
 
 				await processor.processInput(args1)
 				const callsAfterFirst = fetchSpy.mock.calls.filter(
-					(call) =>
-						typeof call[0] === "string" && call[0].includes("/v4/profile"),
+					(call) => typeof call[0] === "string" && call[0].includes("/profile"),
 				).length
 
 				const args2: ProcessInputArgs = {
@@ -251,8 +249,7 @@ describe.skipIf(!shouldRunIntegration)(
 
 				await processor.processInput(args2)
 				const callsAfterSecond = fetchSpy.mock.calls.filter(
-					(call) =>
-						typeof call[0] === "string" && call[0].includes("/v4/profile"),
+					(call) => typeof call[0] === "string" && call[0].includes("/profile"),
 				).length
 
 				expect(callsAfterSecond).toBe(callsAfterFirst)
@@ -267,8 +264,8 @@ describe.skipIf(!shouldRunIntegration)(
 				}) => `<mastra-memories>${data.userMemories}</mastra-memories>`
 
 				const processor = new SupermemoryInputProcessor({
-					containerTag: INTEGRATION_CONFIG.containerTag,
-					customId: INTEGRATION_CONFIG.customId,
+					namespace: INTEGRATION_CONFIG.namespace,
+					id: INTEGRATION_CONFIG.id,
 					apiKey: INTEGRATION_CONFIG.apiKey,
 					baseUrl: INTEGRATION_CONFIG.baseUrl,
 					mode: "profile",
@@ -295,11 +292,11 @@ describe.skipIf(!shouldRunIntegration)(
 			it("should save conversation when addMemory is always", async () => {
 				const fetchSpy = vi.spyOn(globalThis, "fetch")
 
-				const customId = `test-mastra-${Date.now()}`
+				const id = `test-mastra-${Date.now()}`
 
 				const processor = new SupermemoryOutputProcessor({
-					containerTag: INTEGRATION_CONFIG.containerTag,
-					customId,
+					namespace: INTEGRATION_CONFIG.namespace,
+					id,
 					apiKey: INTEGRATION_CONFIG.apiKey,
 					baseUrl: INTEGRATION_CONFIG.baseUrl,
 					addMemory: "always",
@@ -319,8 +316,7 @@ describe.skipIf(!shouldRunIntegration)(
 
 				const conversationCalls = fetchSpy.mock.calls.filter(
 					(call) =>
-						typeof call[0] === "string" &&
-						call[0].includes("/v4/conversations"),
+						typeof call[0] === "string" && call[0].includes("/document"),
 				)
 				expect(conversationCalls.length).toBeGreaterThan(0)
 
@@ -331,8 +327,8 @@ describe.skipIf(!shouldRunIntegration)(
 				const fetchSpy = vi.spyOn(globalThis, "fetch")
 
 				const processor = new SupermemoryOutputProcessor({
-					containerTag: INTEGRATION_CONFIG.containerTag,
-					customId: "test-thread",
+					namespace: INTEGRATION_CONFIG.namespace,
+					id: "test-thread",
 					apiKey: INTEGRATION_CONFIG.apiKey,
 					baseUrl: INTEGRATION_CONFIG.baseUrl,
 					addMemory: "never",
@@ -352,8 +348,7 @@ describe.skipIf(!shouldRunIntegration)(
 
 				const conversationCalls = fetchSpy.mock.calls.filter(
 					(call) =>
-						typeof call[0] === "string" &&
-						call[0].includes("/v4/conversations"),
+						typeof call[0] === "string" && call[0].includes("/document"),
 				)
 				expect(conversationCalls.length).toBe(0)
 
@@ -364,8 +359,8 @@ describe.skipIf(!shouldRunIntegration)(
 				const fetchSpy = vi.spyOn(globalThis, "fetch")
 
 				const processor = new SupermemoryOutputProcessor({
-					containerTag: INTEGRATION_CONFIG.containerTag,
-					customId: INTEGRATION_CONFIG.customId,
+					namespace: INTEGRATION_CONFIG.namespace,
+					id: INTEGRATION_CONFIG.id,
 					apiKey: INTEGRATION_CONFIG.apiKey,
 					baseUrl: INTEGRATION_CONFIG.baseUrl,
 					addMemory: "always",
@@ -390,8 +385,7 @@ describe.skipIf(!shouldRunIntegration)(
 
 				const conversationCalls = fetchSpy.mock.calls.filter(
 					(call) =>
-						typeof call[0] === "string" &&
-						call[0].includes("/v4/conversations"),
+						typeof call[0] === "string" && call[0].includes("/document"),
 				)
 				expect(conversationCalls.length).toBeGreaterThan(0)
 
@@ -402,8 +396,8 @@ describe.skipIf(!shouldRunIntegration)(
 		describe("createSupermemoryProcessors", () => {
 			it("should create working input and output processors", async () => {
 				const { input, output } = createSupermemoryProcessors({
-					containerTag: INTEGRATION_CONFIG.containerTag,
-					customId: `processors-test-${Date.now()}`,
+					namespace: INTEGRATION_CONFIG.namespace,
+					id: `processors-test-${Date.now()}`,
 					apiKey: INTEGRATION_CONFIG.apiKey,
 					baseUrl: INTEGRATION_CONFIG.baseUrl,
 					mode: "profile",
@@ -445,8 +439,8 @@ describe.skipIf(!shouldRunIntegration)(
 				}
 
 				const enhanced = withSupermemory(config, {
-					containerTag: INTEGRATION_CONFIG.containerTag,
-					customId: `wrapper-test-${Date.now()}`,
+					namespace: INTEGRATION_CONFIG.namespace,
+					id: `wrapper-test-${Date.now()}`,
 					apiKey: INTEGRATION_CONFIG.apiKey,
 					baseUrl: INTEGRATION_CONFIG.baseUrl,
 					mode: "profile",
@@ -498,8 +492,8 @@ describe.skipIf(!shouldRunIntegration)(
 				}
 
 				const enhanced = withSupermemory(config, {
-					containerTag: INTEGRATION_CONFIG.containerTag,
-					customId: INTEGRATION_CONFIG.customId,
+					namespace: INTEGRATION_CONFIG.namespace,
+					id: INTEGRATION_CONFIG.id,
 					apiKey: INTEGRATION_CONFIG.apiKey,
 					baseUrl: INTEGRATION_CONFIG.baseUrl,
 					mode: "profile",
@@ -519,8 +513,8 @@ describe.skipIf(!shouldRunIntegration)(
 		describe("Options", () => {
 			it("verbose mode should not break functionality", async () => {
 				const processor = new SupermemoryInputProcessor({
-					containerTag: INTEGRATION_CONFIG.containerTag,
-					customId: INTEGRATION_CONFIG.customId,
+					namespace: INTEGRATION_CONFIG.namespace,
+					id: INTEGRATION_CONFIG.id,
 					apiKey: INTEGRATION_CONFIG.apiKey,
 					baseUrl: INTEGRATION_CONFIG.baseUrl,
 					mode: "profile",
@@ -545,8 +539,8 @@ describe.skipIf(!shouldRunIntegration)(
 				const fetchSpy = vi.spyOn(globalThis, "fetch")
 
 				const processor = new SupermemoryInputProcessor({
-					containerTag: INTEGRATION_CONFIG.containerTag,
-					customId: INTEGRATION_CONFIG.customId,
+					namespace: INTEGRATION_CONFIG.namespace,
+					id: INTEGRATION_CONFIG.id,
 					apiKey: INTEGRATION_CONFIG.apiKey,
 					baseUrl: INTEGRATION_CONFIG.baseUrl,
 					mode: "profile",
@@ -563,8 +557,7 @@ describe.skipIf(!shouldRunIntegration)(
 				await processor.processInput(args)
 
 				const profileCalls = fetchSpy.mock.calls.filter(
-					(call) =>
-						typeof call[0] === "string" && call[0].includes("/v4/profile"),
+					(call) => typeof call[0] === "string" && call[0].includes("/profile"),
 				)
 				expect(profileCalls.length).toBeGreaterThan(0)
 
@@ -578,8 +571,8 @@ describe.skipIf(!shouldRunIntegration)(
 		describe("Error handling", () => {
 			it("should handle invalid API key gracefully", async () => {
 				const processor = new SupermemoryInputProcessor({
-					containerTag: INTEGRATION_CONFIG.containerTag,
-					customId: INTEGRATION_CONFIG.customId,
+					namespace: INTEGRATION_CONFIG.namespace,
+					id: INTEGRATION_CONFIG.id,
 					apiKey: "invalid-api-key-12345",
 					baseUrl: INTEGRATION_CONFIG.baseUrl,
 					mode: "profile",
@@ -601,8 +594,8 @@ describe.skipIf(!shouldRunIntegration)(
 
 			it("output processor should handle save errors gracefully", async () => {
 				const processor = new SupermemoryOutputProcessor({
-					containerTag: INTEGRATION_CONFIG.containerTag,
-					customId: "error-test",
+					namespace: INTEGRATION_CONFIG.namespace,
+					id: "error-test",
 					apiKey: "invalid-api-key-12345",
 					baseUrl: INTEGRATION_CONFIG.baseUrl,
 					addMemory: "always",

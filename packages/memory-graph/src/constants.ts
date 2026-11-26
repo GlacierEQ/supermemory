@@ -1,4 +1,23 @@
-import type { GraphThemeColors } from "./types"
+import type { GraphThemeColors, ResolvedMemoryGraphLabels } from "./types"
+
+export const DEFAULT_LABELS: ResolvedMemoryGraphLabels = {
+	documentGroup: "Documents",
+	documentTypeFallback: "document",
+	documentSourceEdge: "Document source",
+	documentToMemoryEdge: "Document to memory",
+	memoryCount: (count: number) => `${count} memories`,
+	documentIdLabel: "Document",
+	viewDocument: "View document",
+	goToDocument: "Go to document",
+	nextDocument: "Next document",
+	previousDocument: "Prev document",
+	showMemory: "Go to memory",
+	loadingMoreDocuments: (count: number) =>
+		`Loading more documents... (${count})`,
+	emptyGraph: "No memories yet",
+}
+
+export const DEFAULT_HOVER_POPOVER_Z_INDEX = 100
 
 export const MEMORY_BORDER_KEYS = {
 	forgotten: "memBorderForgotten",
@@ -15,16 +34,23 @@ export const FORCE_CONFIG = {
 		fallback: 0.05,
 	},
 	linkDistance: 300,
-	docMemoryDistance: 180,
-	chargeStrength: -2000,
-	collisionRadius: { document: 70, memory: 35 },
-	collisionStrength: 0.7,
+	docMemoryDistance: 240,
+	docMemoryDistanceScale: 36,
+	docMemoryDistanceMax: 560,
+	chargeStrength: -2400,
+	collisionRadius: { document: 80, memory: 48 },
+	collisionStrength: 0.82,
 	centeringStrength: 0.06,
 	alphaDecay: 0.025,
 	alphaMin: 0.001,
 	velocityDecay: 0.45,
 	alphaTarget: 0.3,
+	settleMeanVelocity: 1,
+	settleMaxVelocity: 3,
+	settleStableTicks: 12,
+	settleMaxTicks: 360,
 	preSettleTicks: 150,
+	densePreSettleTicks: 12,
 }
 
 export const GRAPH_SETTINGS = {
@@ -36,7 +62,7 @@ export const ANIMATION = {
 	dimDuration: 1500,
 }
 
-export const DEFAULT_COLORS: GraphThemeColors = {
+export const DEFAULT_COLORS: GraphThemeColors & { edgeDocument: string } = {
 	bg: "#0f1419",
 	docFill: "#1B1F24",
 	docStroke: "#2A2F36",
@@ -48,9 +74,10 @@ export const DEFAULT_COLORS: GraphThemeColors = {
 	textPrimary: "#ffffff",
 	textSecondary: "#e2e8f0",
 	textMuted: "#94a3b8",
+	edgeDocument: "#64748B",
 	edgeDerives: "#FBBF24",
-	edgeUpdates: "#A78BFA",
-	edgeExtends: "#38BDF8",
+	edgeUpdates: "#9B8AE6",
+	edgeExtends: "#94A3B8",
 	memBorderForgotten: "#EF4444",
 	memBorderExpiring: "#F59E0B",
 	memBorderRecent: "#10B981",

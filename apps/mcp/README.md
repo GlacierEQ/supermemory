@@ -1,28 +1,33 @@
-# Supermemory MCP Server 4.0
+# Supermemory MCP Server
 
-A standalone MCP (Model Context Protocol) server for Supermemory that gives AI assistants persistent memory across conversations. Built on Cloudflare Workers with Durable Objects for scalable, persistent connections.
+The Supermemory MCP server gives authenticated AI clients access to a user's
+memories, profile, spaces, and interactive MCP Apps.
 
-## Features
+## Runtime Model
 
-- **Authentication** - Supports both API keys and OAuth authentication
-- **Persistent Memory** - Save and recall information across sessions
-- **User Profiles** - Auto-generated profiles from stored memories
-- **Project Scoping** - Organize memories by project with `x-sm-project` header
-- **Analytics** - PostHog integration for usage tracking
+- MCP SDK v2 with a fresh `McpServer` for every HTTP request
+- Modern MCP `2026-07-28` plus stateless compatibility for 2025 clients
+- OAuth token validation on every request
+- No MCP protocol session or protocol Durable Object
+- Active space stored as application state in a dedicated Durable Object
+- Space state keyed by authenticated `organizationId + userId`
 
-## Setup
+The space used by an operation resolves in this order:
 
-### Quick Install (Recommended)
+1. An explicit `namespace` tool or prompt argument
+2. The account's durable active space
+3. The Supermemory client default, `sm_project_default`
 
-```bash
-npx -y install-mcp@latest https://mcp.supermemory.ai/mcp --client claude --oauth=yes
+An explicit override applies only to that call. It does not mutate the active
+space.
+
+## Server URL
+
+```text
+https://mcp.supermemory.ai/mcp
 ```
 
-Replace `claude` with your MCP client: `claude`, `cursor`, `windsurf`, etc.
-
-### Manual Configuration
-
-Add to your MCP client config (Claude Desktop, Cursor, Windsurf, etc.):
+Example client configuration:
 
 ```json
 {
@@ -34,176 +39,140 @@ Add to your MCP client config (Claude Desktop, Cursor, Windsurf, etc.):
 }
 ```
 
-The server uses OAuth authentication by default. Your MCP client will automatically discover the authorization server via `/.well-known/oauth-protected-resource` and prompt you to authenticate.
-
-### API Key Authentication (Alternative)
-
-If you prefer to use an API key instead of OAuth, you can pass it directly in the `Authorization` header. Get your API key from [app.supermemory.ai](https://app.supermemory.ai):
-
-```json
-{
-  "mcpServers": {
-    "supermemory": {
-      "url": "https://mcp.supermemory.ai/mcp",
-      "headers": {
-        "Authorization": "Bearer sm_your_api_key_here"
-      }
-    }
-  }
-}
-```
-
-API keys start with `sm_` and are automatically detected. When an API key is provided, OAuth authentication is skipped.
-
-### Project Scoping (Optional)
-
-To scope all operations to a specific project, add the `x-sm-project` header:
-
-```json
-{
-  "mcpServers": {
-    "supermemory": {
-      "url": "https://mcp.supermemory.ai/mcp",
-      "headers": {
-        "x-sm-project": "your-project-id"
-      }
-    }
-  }
-}
-```
+The client discovers the OAuth authorization server through
+`/.well-known/oauth-protected-resource/mcp`.
 
 ## Tools
 
-### `memory`
+### Model-visible tools
 
-Save or forget information about the user.
+| Tool | Purpose |
+| --- | --- |
+| `search_memory` | Search memories in a space |
+| `get_profile` | Get stable and recent profile context for a space |
+| `list_documents` | List document metadata and summaries in a space |
+| `get_document` | Read one document's available content by ID |
+| `list_memories` | List extracted memory entries and their source document IDs |
+| `list_spaces` | List spaces visible to the authenticated account |
+| `who_am_i` | Return identity, access, and active-space context |
+| `add_memory` | Accept a document for asynchronous memory extraction (legacy `action: "forget"` remains supported) |
+| `forget_memory` | Forget a memory matching the supplied content |
 
-```json
-{
-  "content": "User prefers dark mode and uses TypeScript",
-  "action": "save",
-  "containerTag": "optional-project-tag"
-}
-```
+### Document status
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `content` | string | Yes | The memory content to save or forget |
-| `action` | `"save"` \| `"forget"` | No | Default: `"save"` |
-| `containerTag` | string | No | Project tag to scope the memory |
+`list_documents` and `get_document` return two status fields:
 
-### `recall`
+| Field | Value | Meaning |
+| --- | --- | --- |
+| `status` | `done` | Content is processed and readable |
+| `dreamingStatus` | `dreaming` | Memory extraction is pending, running, or retrying |
+| `dreamingStatus` | `done` | Memory extraction settled, possibly with no memories |
 
-Search memories and get user profile.
+`dreamingStatus` appears only when the API returns it. Neither `done` means
+memories are searchable yet.
 
-```json
-{
-  "query": "What are the user's programming preferences?",
-  "includeProfile": true,
-  "containerTag": "optional-project-tag"
-}
-```
+### MCP App launchers
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `query` | string | Yes | Search query to find relevant memories |
-| `includeProfile` | boolean | No | Include user profile summary. Default: `true` |
-| `containerTag` | string | No | Project tag to scope the search |
+| Tool | Purpose |
+| --- | --- |
+| `select-space` | Open the interactive space picker |
+| `memory-graph` | Open the interactive memory graph |
+| `guided-save` | Open the guided memory form |
+| `upload-file` | Open the file upload form |
 
-### `whoAmI`
+### App-only tools
 
-Get the current logged-in user's information.
+These tools are available to the embedded MCP App and hidden from the model.
 
-```json
-{}
-```
+| Tool | Purpose |
+| --- | --- |
+| `set-active-tag` | Persist the selected active space |
+| `save-memory` | Submit the guided save form |
+| `prepare-file-upload` | Prepare a secure direct file upload |
+| `fetch-graph-data` | Fetch graph documents for the app |
 
-Returns: `{ userId, email, name, client, sessionId }`
+## Resources And Prompt
 
-## Resources
+| Kind | Name or URI | Purpose |
+| --- | --- | --- |
+| Resource | `supermemory://profile` | Profile facts in the effective space |
+| Resource | `supermemory://spaces` | Visible spaces |
+| Resource | `ui://supermemory/app-<sha256>.html` | Embedded MCP App bundle |
+| Prompt | `context` | Profile and recent context for an optional space |
 
-| URI | Description |
-|-----|-------------|
-| `supermemory://profile` | User profile with stable preferences and recent activity |
-| `supermemory://projects` | List of available memory projects |
-
-## Prompts
-
-| Name | Description |
-|------|-------------|
-| `context` | User profile and preferences for system context injection |
+The App resource and tool metadata include both current nested `ui` metadata and
+the legacy flat resource URI key while MCP Apps completes its SDK v2 migration.
+The Worker runtime does not import the SDK v1 Apps server helpers.
 
 ## Development
 
-### Prerequisites
-
-- [Bun](https://bun.sh/) or Node.js
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/)
-
-### Install Dependencies
+Install from the repository root:
 
 ```bash
 bun install
 ```
 
-### Environment Variables
-
-Create a `.dev.vars` file:
-
-```env
-API_URL=http://localhost:8787
-or 
-API_URL=https://api.supermemory.ai
-```
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `API_URL` | Main Supermemory API URL for OAuth validation | `https://api.supermemory.ai` |
-
-### Run Locally
+Run the local Worker:
 
 ```bash
+cd apps/mcp
 bun run dev
 ```
 
-The server will start at `http://localhost:8788`.
+The portless URL is `http://mcp.dev.supermemory`.
 
-**Note:** For local development, you also need the main Supermemory API running at the `API_URL` for OAuth token validation.
-
-### Deploy
+Useful commands:
 
 ```bash
-bun run deploy
+bun run build
+bun run check-types
+bun run test:unit
+bun run test:e2e
 ```
 
-## Architecture
+Authenticated end-to-end tests use credentials captured by:
 
-```
-┌─────────────────┐  OAuth/API Key ┌──────────────────┐
-│   MCP Client    │◄──────────────►│  Supermemory API │
-│ (Claude, Cursor)│                │  (api.supermemory.ai)
-└────────┬────────┘                └──────────────────┘
-         │                                   ▲
-         │ MCP Protocol                      │ Auth Validation
-         ▼                                   │
-┌─────────────────────────────────────────────────────┐
-│            Supermemory MCP Server                   │
-│         (mcp.supermemory.ai/mcp)                   │
-│  ┌─────────────────────────────────────────────┐   │
-│  │           Cloudflare Durable Object          │   │
-│  │  • Session state                             │   │
-│  │  • Client info persistence                   │   │
-│  │  • MCP protocol handling                     │   │
-│  └─────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────┘
+```bash
+bun e2e/capture-oauth-token.ts
 ```
 
-## Tech Stack
+Without stored OAuth credentials, authenticated test groups skip. Public OAuth
+discovery and rejection tests still run.
 
-- **Runtime:** Cloudflare Workers
-- **State:** Durable Objects with SQLite
-- **Framework:** Hono
-- **MCP SDK:** @modelcontextprotocol/sdk + agents
-- **API Client:** supermemory SDK
-- **Analytics:** PostHog
+## Configuration
 
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `API_URL` | Supermemory API and OAuth issuer | `https://api.supermemory.ai` |
+| `MCP_RESOURCE` | Expected OAuth audience | `https://mcp.supermemory.ai/mcp` |
+| `ALLOWED_MCP_ORIGIN_HOSTNAMES` | Additional comma-separated browser origins | Built-in host allowlist |
+| `POSTHOG_API_KEY` | Server-side MCP tool analytics project key | Disabled |
+| `POSTHOG_HOST` | PostHog ingestion host | `https://us.i.posthog.com` |
+
+## Storage And Rollout
+
+`SpaceState` stores only the active space's namespace (under the legacy
+`activeContainerTag` key, so existing selections survive). It never stores bearer
+tokens, MCP client identity, or protocol messages.
+
+The old `SupermemoryMCP` class and binding remain inert for one rollout. This
+keeps the migration non-destructive and rollback-safe. A later deployment can
+delete the old protocol class after production traffic and rollback windows
+have been checked.
+
+## MCP Registry
+
+`server.json` describes this server for the official MCP Registry
+(https://registry.modelcontextprotocol.io) under the name `ai.supermemory/memory`.
+The namespace is verified through `https://supermemory.ai/.well-known/mcp-registry-auth`,
+which carries the registry signing public key; the matching private key is held by the
+person who publishes.
+
+To publish a new version:
+
+```bash
+# bump "version" in server.json to match package.json (the registry rejects reused versions)
+mcp-publisher validate apps/mcp/server.json
+mcp-publisher login http --domain supermemory.ai --private-key "$MCP_REGISTRY_PRIVATE_KEY"
+mcp-publisher publish apps/mcp/server.json
+```
